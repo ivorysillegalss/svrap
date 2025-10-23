@@ -15,6 +15,14 @@
 struct Point {
   int x;
   int y;
+
+  bool operator==(const Point& other) const{
+    return x == other.x && y == other.y;
+  }
+
+  bool operator!=(const Point& other) const{
+    return y != other.y && x != other.x; 
+  }
 };
 
 // 定义 VertexInfo 结构体（如果需要 vertex_map）
