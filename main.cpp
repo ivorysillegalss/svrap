@@ -8,9 +8,11 @@
 #include <utility>
 #include <vector>
 
-void greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
-                         std::vector<std::vector<double>> distance,
-                         std::map<std::pair<int, int>, VertexInfo> vertex_map) {
+GreedyLocalSearch
+greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
+                    std::vector<std::vector<double>> distance,
+                    std::map<std::pair<int, int>, VertexInfo> vertex_map,
+                    std::vector<Point> locations) {
   // 对于每个 off_vertice 中的点，计算它到所有
   // on_vertice中点的距离（使用之前的 distance 矩阵）。
   // 找到距离最小的点（best_vertice）和对应的最小距离（best_cost）。
@@ -26,10 +28,12 @@ void greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
   }
   std::cout << "初始路径长度：" << initial_route.size() << std::endl;
 
-  // TODO 贪婪局部搜索逻辑
+  // 带入贪婪局部搜索第一步时的初始解
+  GreedyLocalSearch solver(locations, distance, ontour, offtour, vertex_map,
+                           initial_route);
+  solver.search();
+  return solver;
 }
-
-void input_point(std::string filename) {}
 
 int main() {
   try {
@@ -66,7 +70,8 @@ int main() {
     build_vertex_map(locations, ontour, offtour, distance, vertex_map);
     std::cout << "Build points info" << std::endl;
 
-    greedy_local_search(ontour, offtour, distance, vertex_map);
+    // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
+    GreedyLocalSearch greedy_searcher = greedy_local_search(ontour, offtour, distance, vertex_map, locations);
 
   } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;

@@ -111,9 +111,21 @@ nearest_neighbour(const std::vector<Point> &on_vertices,
     // 删除待遍历队列中的该最优点 防止重复计算
     unvisited.erase(unvisited.begin() + best_index);
 
-    return route;
   }
+  return route;
 }
+
+// 构造函数 赋值
+GreedyLocalSearch::GreedyLocalSearch(
+    const std::vector<Point>& locations,
+    const std::vector<std::vector<double>>& distance,
+    const std::vector<Point>& ontour,
+    const std::vector<Point>& offtour,
+    const std::map<std::pair<int, int>, VertexInfo>& vertex_map,
+    const std::vector<Point>& route)
+    : locations_(locations), distance_(distance),
+      ontour_(ontour), offtour_(offtour),
+      vertex_map_(vertex_map), route_(route) {}
 
 void GreedyLocalSearch::add(const Point &vertex, size_t index) {
   if (index > route_.size()) {
