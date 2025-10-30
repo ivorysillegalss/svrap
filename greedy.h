@@ -1,4 +1,5 @@
 #include "input.h"
+#include <cmath>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -25,10 +26,15 @@ public:
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<Point> &route);
 
-  void search();
+  double search();
   const std::vector<Point> &get_route() const { return route_; }
+  const std::vector<std::vector<double>> &get_distance() const { return distance_; }
   const std::vector<Point> &get_ontour() const { return ontour_; }
   const std::vector<Point> &get_offtour() const { return offtour_; }
+  const double_t &get_cost() const { return solution_cost_; }
+  const std::map<std::pair<int, int>, VertexInfo> &get_vertex_map() const {
+    return vertex_map_;
+  }
 
 private:
   std::vector<Point> locations_;
@@ -36,7 +42,10 @@ private:
   std::vector<Point> ontour_;
   std::vector<Point> offtour_;
   std::map<std::pair<int, int>, VertexInfo> vertex_map_;
+  //   记录每个点是否在路径
+  //  保存每个 非路径点 到 最近路径点 的距离（best_cost *0.5 计入总成本）
   std::vector<Point> route_;
+  std::double_t solution_cost_;
 
   void add(const Point &vertex, size_t index);
   void drop(const Point &vertex);

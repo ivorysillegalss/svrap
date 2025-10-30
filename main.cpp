@@ -1,5 +1,6 @@
 #include "greedy.h"
 #include "input.h"
+#include "tabu_search.h"
 #include <cmath>
 #include <exception>
 #include <iostream>
@@ -34,6 +35,17 @@ greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
   solver.search();
   return solver;
 }
+
+TabuSearch
+tabu_search(const std::vector<Point> &locations,
+            const std::vector<std::vector<double>> &distance,
+            const std::vector<Point> &ontour, const std::vector<Point> &offtour,
+            const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+            const std::vector<Point> &route) {
+  // TODO
+  TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route);
+  return solver;
+};
 
 int main() {
   try {
@@ -71,8 +83,19 @@ int main() {
     std::cout << "Build points info" << std::endl;
 
     // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
-    GreedyLocalSearch greedy_searcher = greedy_local_search(ontour, offtour, distance, vertex_map, locations);
+    GreedyLocalSearch greedy_searcher =
+        greedy_local_search(ontour, offtour, distance, vertex_map, locations);
 
+    // TODO 创建搜索上下文结构体 searchctx
+
+    // 执行禁忌搜索 骨架大概完成 具体逻辑TODO
+    TabuSearch tabu_seracher = tabu_search(
+        locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
+        greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
+        greedy_searcher.get_route());
+    tabu_seracher.search(T_VALUE, Q_VALUE);
+    
+    // TODO 后续输出启发式最优路线耗时等逻辑
   } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;
     return 1;

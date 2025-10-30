@@ -110,22 +110,19 @@ nearest_neighbour(const std::vector<Point> &on_vertices,
     route.push_back(best_vertex);
     // 删除待遍历队列中的该最优点 防止重复计算
     unvisited.erase(unvisited.begin() + best_index);
-
   }
   return route;
 }
 
 // 构造函数 赋值
 GreedyLocalSearch::GreedyLocalSearch(
-    const std::vector<Point>& locations,
-    const std::vector<std::vector<double>>& distance,
-    const std::vector<Point>& ontour,
-    const std::vector<Point>& offtour,
-    const std::map<std::pair<int, int>, VertexInfo>& vertex_map,
-    const std::vector<Point>& route)
-    : locations_(locations), distance_(distance),
-      ontour_(ontour), offtour_(offtour),
-      vertex_map_(vertex_map), route_(route) {}
+    const std::vector<Point> &locations,
+    const std::vector<std::vector<double>> &distance,
+    const std::vector<Point> &ontour, const std::vector<Point> &offtour,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<Point> &route)
+    : locations_(locations), distance_(distance), ontour_(ontour),
+      offtour_(offtour), vertex_map_(vertex_map), route_(route) {}
 
 void GreedyLocalSearch::add(const Point &vertex, size_t index) {
   if (index > route_.size()) {
@@ -147,7 +144,8 @@ void GreedyLocalSearch::drop(const Point &vertex) {
   auto it = std::find(route_.begin(), route_.end(), vertex);
   if (it == route_.end()) {
     throw std::invalid_argument("Point(" + std::to_string(vertex.x) + ", " +
-                                std::to_string(vertex.y) + ") Not at the route!");
+                                std::to_string(vertex.y) +
+                                ") Not at the route!");
   }
   route_.erase(it);
   auto ontour_it = std::find(ontour_.begin(), ontour_.end(), vertex);
@@ -184,10 +182,10 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
       index1 = vertex_map_.at(key1).index;
       index1 = vertex_map_.at(key2).index;
     } catch (const std::out_of_range &e) {
-      throw std::runtime_error("can't find point (" + std::to_string(key1.first) +
-                               ", " + std::to_string(key1.second) + ") or (" +
-                               std::to_string(key2.first) + ", " +
-                               std::to_string(key2.second) + ") index");
+      throw std::runtime_error(
+          "can't find point (" + std::to_string(key1.first) + ", " +
+          std::to_string(key1.second) + ") or (" + std::to_string(key2.first) +
+          ", " + std::to_string(key2.second) + ") index");
     }
     total_cost += distance_[index1][index2];
   }
@@ -245,7 +243,7 @@ void GreedyLocalSearch::update_vertex_map() {
   }
 }
 
-void GreedyLocalSearch::search() {
+double GreedyLocalSearch::search() {
   double solution_cost = calculate_route_cost(route_);
   for (const auto &vl : locations_) {
 
@@ -415,4 +413,6 @@ void GreedyLocalSearch::search() {
       }
     }
   }
+  solution_cost_ = solution_cost;
+  return solution_cost;
 }
