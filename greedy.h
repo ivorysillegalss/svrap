@@ -26,9 +26,16 @@ public:
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<Point> &route);
 
+  explicit GreedyLocalSearch(
+      const std::vector<Point> &route,
+      const std::map<std::pair<int, int>, VertexInfo> &vertex_map);
+
   double search();
+  double tabu_cacl_cost();
   const std::vector<Point> &get_route() const { return route_; }
-  const std::vector<std::vector<double>> &get_distance() const { return distance_; }
+  const std::vector<std::vector<double>> &get_distance() const {
+    return distance_;
+  }
   const std::vector<Point> &get_ontour() const { return ontour_; }
   const std::vector<Point> &get_offtour() const { return offtour_; }
   const double_t &get_cost() const { return solution_cost_; }

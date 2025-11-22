@@ -168,6 +168,7 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
   std::swap(*it1, *it2);
 }
 
+// 对应py中的cacl_cost
 double
 GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   if (route.empty()) {
@@ -203,6 +204,10 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     }
   }
   return total_cost;
+}
+
+double GreedyLocalSearch::tabu_cacl_cost() {
+  return calculate_route_cost(route_);
 }
 
 void GreedyLocalSearch::update_vertex_map() {

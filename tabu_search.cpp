@@ -1,7 +1,11 @@
 #include "tabu_search.h"
+#include "greedy.h"
 #include "input.h"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -11,9 +15,20 @@ TabuSearch::TabuSearch(
     const std::vector<std::vector<double>> &distance,
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
     const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-    const std::vector<Point> &route)
+    const std::vector<Point> &route, const std::double_t &cost)
     : locations_(locations), distance_(distance), ontour_(ontour),
-      offtour_(offtour), vertex_map_(vertex_map), route_(route) {}
+      offtour_(offtour), vertex_map_(vertex_map), route_(route),
+      solution_cost_(cost) {
+  cost_trend_.push_back(cost);
+}
+
+void TabuInfo::add_tabu_num() { current_dabu_size++; }
+
+void TabuInfo::reset_list() {
+  tabu_list.clear();
+  tabu_time.clear();
+  current_dabu_size = 0;
+}
 
 void TabuInfo::update_tabu() {
   for (int i = 0; i < tabu_time.size(); ++i) {
@@ -51,14 +66,22 @@ bool TabuInfo::is_tabu_iter(
   return std::find(tabu_list.begin(), tabu_list.end(), iter) == tabu_list.end();
 }
 
+std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
+TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
+                          std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                          int number) {
+  // TODO
+  return {{}, {}};
+}
+
 void TabuSearch::search(int T, int Q, int TBL) {
   int t = 0, q = 0;
   // t q 代表当前已经执行了路径重连和多样化的次数
-  std::vector<std::vector<Point>> soluntionSet{route_};
+  std::vector<std::vector<Point>> soluntion_set{route_};
   // 所有历史最优解（需要存储一个列表 最后在这个列表的基础上进行比较得出）
-  std::vector<Point> itersolution = route_;
+  std::vector<Point> iter_solution = route_;
   // 当前的迭代解
-  std::map<std::pair<int, int>, VertexInfo> iterdic = vertex_map_;
+  std::map<std::pair<int, int>, VertexInfo> iter_dic = vertex_map_;
   // 当前状态的字典 —— 当前状态下的位置字典
   double best_cost = solution_cost_;
   // 启发搜索过程下全局最优成本
@@ -120,18 +143,54 @@ void TabuSearch::search(int T, int Q, int TBL) {
       }
     }
 
-    auto min_itercost_p = std::min_element(itercost.begin(), itercost.end());
-    double min_itercost = *min_itercost_p;
+    auto min_iter_cost_p = std::min_element(itercost.begin(), itercost.end());
+    double min_iter_cost = *min_iter_cost_p;
     // 获得索引
-    std::size_t min_itercost_index = min_itercost_p - itercost.begin();
+    std::size_t min_iter_cost_index = min_iter_cost_p - itercost.begin();
 
-    auto min_iter_solution = operated_solution[min_itercost_index];
-    auto min_iter_idc = operated_dic[min_itercost_index];
-    auto min_iter_operated = iterchange[min_itercost_index];
+    auto min_iter_solution = operated_solution[min_iter_cost_index];
+    auto min_iter_idc = operated_dic[min_iter_cost_index];
+    auto min_iter_operated = iterchange[min_iter_cost_index];
 
-    // if (min_itercost <= best_cost && tabu.is_tabu_iter(min_iter_operated)) {
-    //   t ++;
-    //   if(t == T)
-    // }
+    if (min_iter_cost <= best_cost && tabu.is_tabu_iter(min_iter_operated)) {
+      t++;
+      if (t == T) {
+        auto diversify = diversication(soluntion_set, iter_dic, 2);
+        q += 1;
+
+        if (q < Q) {
+          iter_solution = std::get<0>(diversify);
+          iter_dic = std::get<1>(diversify);
+          soluntion_set.push_back(iter_solution);
+
+          GreedyLocalSearch calculater(iter_solution, iter_dic);
+          best_cost = calculater.tabu_cacl_cost();
+          cost_trend_.push_back(best_cost);
+          t = 0;
+          tabu.reset_list();
+          continue;
+
+        } else if (q == Q) {
+          GreedyLocalSearch calculater(std::get<0>(diversify),
+                                       std::get<1>(diversify));
+          double last_cost = calculater.tabu_cacl_cost();
+          if (last_cost <= best_cost) {
+            iter_solution = std::get<0>(diversify);
+            iter_dic = std::get<1>(diversify);
+            best_cost = last_cost;
+            cost_trend_.push_back(best_cost);
+            break;
+          } else if (last_cost > best_cost) {
+            break;
+          }
+        }
+      } else if (t < T) {
+        tabu.update_tabu();
+        continue;
+      }
+    } else if (min_iter_cost <= best_cost && tabu.is_tabu_iter(min_iter_operated)){
+      soluntion_set.push_back(min_iter_solution);
+      // 路径重连部分
+    }
   }
 };

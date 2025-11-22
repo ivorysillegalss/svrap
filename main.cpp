@@ -41,9 +41,10 @@ tabu_search(const std::vector<Point> &locations,
             const std::vector<std::vector<double>> &distance,
             const std::vector<Point> &ontour, const std::vector<Point> &offtour,
             const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-            const std::vector<Point> &route) {
+            const std::vector<Point> &route, const std::double_t cost) {
   // TODO
-  TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route);
+  TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route,
+                    cost);
   return solver;
 };
 
@@ -92,7 +93,7 @@ int main() {
     TabuSearch tabu_seracher = tabu_search(
         locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
         greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
-        greedy_searcher.get_route());
+        greedy_searcher.get_route(),greedy_searcher.get_cost());
     tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
                          TABU_LIST_LENGTH);
 
