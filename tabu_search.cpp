@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -80,6 +81,138 @@ void TabuInfo ::add_tabu_iter(
   tabu_list.push_back(iter);
   tabu_time.push_back(tabu_limit);
   current_tabu_size++;
+}
+
+std::tuple<std::vector<Point>, double>
+TabuSearch::path_relinking(std::vector<std::vector<Point>> solution_set,
+                           std::map<std::pair<int, int>, VertexInfo> iter_dic) {
+  // 前置长度校验
+  if (solution_set.size() < 2) {
+    return {solution_set.back(), solution_cost_};
+  }
+
+  const std::vector<Point> &last_solution =
+      solution_set[solution_set.size() - 2]; // 倒数第二个
+  const std::vector<Point> &current_solution =
+      solution_set.back(); // 最后一个（当前最优）
+
+  // 找出两个解之间“状态不同”的点
+  std::vector<Point> state_change;
+
+  // last → current 中消失的点（从路径中被移出）
+  for (const Point &p : last_solution) {
+    if (std::find(current_solution.begin(), current_solution.end(), p) ==
+        current_solution.end()) {
+      state_change.push_back(p);
+    }
+  }
+
+  // current → last 中新增的点（被插入路径）
+  for (const Point &p : current_solution) {
+    if (std::find(last_solution.begin(), last_solution.end(), p) ==
+        last_solution.end()) {
+      state_change.push_back(p);
+    }
+  }
+  const size_t n_solutions = solution_set.size();
+
+  // 1. 计算每个改变点在历史解集中出现的比例（vertice_on_probabity）
+  std::vector<double> vertice_on_probability;
+  vertice_on_probability.reserve(state_change.size());
+
+  for (const Point &p : state_change) {
+    int count = 0;
+    for (const auto &sol : solution_set) {
+      if (std::find(sol.begin(), sol.end(), p) != sol.end()) {
+        ++count;
+      }
+    }
+    vertice_on_probability.push_back(static_cast<double>(count) / n_solutions);
+  }
+
+  // 2. 构建最终的概率列表：
+  //    - 若该点在 current_solution 中 → 用它出现的比例（on_tour）
+  //    - 若不在 → 用 1−比例（off_tour）
+  std::vector<double> vertice_probability;
+  vertice_probability.reserve(state_change.size());
+
+  int len_sc = state_change.size();
+  for (size_t i = 0; i < len_sc; ++i) {
+    const Point &p = state_change[i];
+    bool is_in_current =
+        std::find(current_solution.begin(), current_solution.end(), p) !=
+        current_solution.end();
+
+    if (is_in_current) {
+      vertice_probability.push_back(vertice_on_probability[i]); // on_tour 比例
+    } else {
+      vertice_probability.push_back(1.0 -
+                                    vertice_on_probability[i]); // off_tour 比例
+    }
+  }
+
+  auto temp_solution = last_solution;
+  for (int i = 0; i < len_sc; i++) {
+    auto max_probability_p = std::max_element(vertice_probability.begin(),
+                                              vertice_probability.end());
+    double max_probability = *max_probability_p;
+    int max_index =
+        std::distance(max_probability_p, vertice_probability.begin());
+
+    // TODO 感觉有一些find的语句条件写错了 记得review
+    // TODO 这些find全部可以更换为unsorted_set的count api
+    if (std::find(current_solution.begin(), current_solution.end(),
+                  state_change[max_index]) != current_solution.end()) {
+
+      std::vector<double> cost_list;
+      for (int i = 0; i < temp_solution.size() + 1; i++) {
+        double i_cost = 0;
+        auto f_route = temp_solution;
+        // 插入算子
+        f_route.insert(f_route.begin() + i, state_change[max_index]);
+        auto new_route = f_route;
+        // 1. 遍历相邻点对，累加边长（对应 Python 的 for j in
+        // range(len(new_route)-1)）
+        for (size_t j = 0; j + 1 < new_route.size(); ++j) {
+          int idx1 = iter_dic.at({new_route[j].x, new_route[j].y}).index;
+          int idx2 =
+              iter_dic.at({new_route[j + 1].x, new_route[j + 1].y}).index;
+          i_cost += distance_[idx1][idx2];
+        }
+
+        // 2. 加上闭合边：最后一个点 → 第一个点（TSP 闭环）
+        // 对应i_cost += distance[dic[new_route[0]][0]][dic[new_route[-1]][0]]
+        if (!new_route.empty()) {
+          int first_idx =
+              iter_dic.at({new_route.front().x, new_route.front().y}).index;
+          int last_idx =
+              iter_dic.at({new_route.back().x, new_route.back().y}).index;
+          i_cost += distance_[last_idx][first_idx];
+        }
+        cost_list.push_back(i_cost);
+      }
+      auto min_cost = std::min_element(cost_list.begin(), cost_list.end());
+      int min_index = std::distance(cost_list.begin(), min_cost);
+      temp_solution.insert(temp_solution.begin() + min_index,
+                           state_change[max_index]);
+      // 删除已处理的项目（完全等价于 Python 的几行 remove）
+      state_change.erase(state_change.begin() + max_index);
+      vertice_probability.erase(vertice_probability.begin() + max_index);
+    } else {
+
+      temp_solution.erase(std::remove(temp_solution.begin(),
+                                      temp_solution.end(),
+                                      state_change[max_index]),
+                          temp_solution.end());
+
+      // 删除已处理的项目（必须放在 remove 之后！）
+      state_change.erase(state_change.begin() + max_index);
+      vertice_probability.erase(vertice_probability.begin() + max_index);
+    }
+  }
+  GreedyLocalSearch calculater(temp_solution, iter_dic);
+  double relinkcost = calculater.tabu_cacl_cost();
+  return {{temp_solution}, {relinkcost}};
 }
 
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
