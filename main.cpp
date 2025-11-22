@@ -9,6 +9,10 @@
 #include <utility>
 #include <vector>
 
+#define PATH_RELINKING_TIMES 50
+#define DIVERSIFICATION 3
+#define TABU_LIST_LENGTH 15
+
 GreedyLocalSearch
 greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
                     std::vector<std::vector<double>> distance,
@@ -93,9 +97,14 @@ int main() {
     TabuSearch tabu_seracher = tabu_search(
         locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
         greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
-        greedy_searcher.get_route(),greedy_searcher.get_cost());
+        greedy_searcher.get_route(), greedy_searcher.get_cost());
+
     tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
                          TABU_LIST_LENGTH);
+
+    auto len_trend = tabu_seracher.get_len_trend();
+    auto iter_solution = tabu_seracher.get_iter_solution();
+    double best_cost = tabu_seracher.get_best_cost();
 
     // TODO 后续输出启发式最优路线耗时等逻辑
   } catch (const std::exception &e) {

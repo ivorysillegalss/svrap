@@ -38,6 +38,9 @@ struct VertexInfo {
 
   VertexInfo(size_t idx, const std::string &st)
       : index(idx), status(st), best_vertex({0, 0}), best_cost(0.0) {}
+  VertexInfo(size_t idx = 0, const std::string &st = "", Point bv = {0, 0},
+             double bc = 0.0)
+      : index(idx), status(st), best_vertex(bv), best_cost(bc) {}
 };
 
 // 函数声明

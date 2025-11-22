@@ -6,10 +6,6 @@
 #include <variant>
 #include <vector>
 
-#define PATH_RELINKING_TIMES 50
-#define DIVERSIFICATION 3
-#define TABU_LIST_LENGTH 15
-
 class TabuSearch {
 
 public:
@@ -21,6 +17,9 @@ public:
       const std::vector<Point> &route, const std::double_t &cost);
 
   void search(int T, int Q, int TBL);
+  std::vector<int> get_len_trend();
+  std::vector<Point> get_iter_solution();
+  std::double_t get_best_cost();
 
 private:
   // 最优解所对应成本的变化趋势
@@ -34,6 +33,9 @@ private:
   //  保存每个 非路径点 到 最近路径点 的距离（best_cost *0.5 计入总成本）
   std::vector<Point> route_;
   std::double_t solution_cost_;
+  // 返回的值
+  std::vector<Point> iter_solution_;
+  std::double_t best_cost_;
 
   // 多样化方法
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>

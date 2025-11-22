@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
+
+// 指选出两条最不相似的路径
+#define DIVERSICATION_TIMES 2
 
 TabuSearch::TabuSearch(
     const std::vector<Point> &locations,
@@ -21,6 +23,10 @@ TabuSearch::TabuSearch(
       solution_cost_(cost) {
   cost_trend_.push_back(cost);
 }
+
+std::vector<int> TabuSearch::get_len_trend() { return cost_trend_; }
+std::vector<Point> TabuSearch::get_iter_solution() { return iter_solution_; }
+std::double_t TabuSearch::get_best_cost() { return best_cost_; }
 
 void TabuInfo::add_tabu_num() { current_tabu_size++; }
 
@@ -80,8 +86,121 @@ std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
 TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
                           std::map<std::pair<int, int>, VertexInfo> iter_dic,
                           int number) {
-  // TODO
-  return {{}, {}};
+  auto current_solution = solution_set.back();
+  std::vector<Point> on_vertice;
+  std::vector<Point> off_vertice;
+  for (int i = 0; i < locations_.size(); i++) {
+    auto loc = locations_.at(i);
+    if (std::find(current_solution.begin(), current_solution.end(), loc) ==
+        current_solution.end()) {
+      on_vertice.push_back(loc);
+    } else {
+      off_vertice.push_back(loc);
+    }
+  }
+  std::vector<double> onvert_probability;
+  std::vector<double> offvert_probability;
+  int len_set = solution_set.size();
+  for (int i = 0; i < on_vertice.size(); i++) {
+    int onvert_pro = 0;
+    auto onvert = on_vertice.at(i);
+    for (int j = 0; j < len_set; j++) {
+      if (std::find(solution_set.begin(), solution_set.end(), onvert) ==
+          solution_set.end()) {
+        onvert_pro++;
+      }
+    }
+    onvert_probability.push_back(onvert_pro / len_set);
+  }
+
+  for (int i = 0; i < off_vertice.size(); i++) {
+    int offvert_pro = 0;
+    auto offvert = off_vertice.at(i);
+    for (int j = 0; j < len_set; j++) {
+      if (std::find(solution_set.begin(), solution_set.end(), off_vertice) ==
+          solution_set.end()) {
+        offvert_pro++;
+      }
+    }
+    onvert_probability.push_back(offvert_pro / len_set);
+  }
+
+  auto onvert_prob = onvert_probability;
+  auto offvert_prob = offvert_probability;
+
+  for (int i = 0; i < number; i++) {
+    auto max_onvert_prob_p =
+        std::max_element(onvert_prob.begin(), onvert_prob.end());
+    auto max_offvert_prob_p =
+        std::max_element(offvert_prob.begin(), offvert_prob.end());
+
+    double max_onvert_prob = *max_onvert_prob_p;
+    double max_offvert_prob = *max_offvert_prob_p;
+
+    // 等价于distance的api
+    std::size_t max_offvert_prob_index =
+        max_offvert_prob_p - offvert_prob.begin();
+    std::size_t max_onvert_prob_index = max_onvert_prob_p - onvert_prob.begin();
+
+    auto max_onvert = on_vertice[max_onvert_prob_index];
+    auto max_offvert = off_vertice[max_offvert_prob_index];
+
+    auto it =
+        std::find(current_solution.begin(), current_solution.end(), max_onvert);
+    std::size_t convertindex = std::distance(current_solution.begin(), it);
+
+    current_solution.at(convertindex) = max_offvert;
+
+    auto key = [](const Point &p) { return std::pair{p.x, p.y}; };
+
+    // 换出
+    iter_dic[key(max_onvert)] = VertexInfo(iter_dic[key(max_onvert)].index,
+                                           "不在路径中", Point{0, 0}, 0.0);
+
+    // 换进（如果不存在就自动插入）
+    iter_dic[key(max_offvert)] = VertexInfo(
+        iter_dic.count(key(max_offvert)) ? iter_dic[key(max_offvert)].index : 0,
+        "在路径中", Point{0, 0}, 0.0);
+
+    // 先保存要删的点
+    // Point max_onvert = on_vertice[max_onvert_prob_index];
+    // Point max_offvert = off_vertice[max_offvert_prob_index];
+
+    // 删除概率（索引删，顺序无所谓）
+    onvert_prob.erase(onvert_prob.begin() + max_onvert_prob_index);
+    offvert_prob.erase(offvert_prob.begin() + max_offvert_prob_index);
+
+    // 删除点（用经典 remove-erase 惯用法，彻底安全）
+    auto erase_val = [](auto &v, const auto &val) {
+      v.erase(std::remove(v.begin(), v.end(), val), v.end());
+    };
+
+    erase_val(on_vertice, max_onvert);
+    erase_val(off_vertice, max_offvert);
+    for (auto &[pt, info] : iter_dic) { // C++17 结构化绑定
+      if (info.status != "不在路径中")
+        continue;
+
+      double best_cost = std::numeric_limits<double>::max();
+      Point best_pred{};
+
+      for (const Point &on : current_solution) {
+        size_t i = iter_dic[{on.x, on.y}].index; // 当前路径上点的 index
+        size_t j = info.index;                   // 要插入点的 index
+
+        double cost = distance_[i][j];
+        if (cost < best_cost) {
+          best_cost = cost;
+          best_pred = on;
+        }
+      }
+
+      info.best_vertex = best_pred;
+      info.best_cost = best_cost;
+    }
+  }
+
+  return {current_solution, iter_dic};
 }
 
 void TabuSearch::search(int T, int Q, int TBL) {
@@ -165,7 +284,8 @@ void TabuSearch::search(int T, int Q, int TBL) {
     if (min_iter_cost <= best_cost && tabu.is_tabu_iter(min_iter_operated)) {
       t++;
       if (t == T) {
-        auto diversify = diversication(soluntion_set, iter_dic, 2);
+        auto diversify =
+            diversication(soluntion_set, iter_dic, DIVERSICATION_TIMES);
         q += 1;
 
         if (q < Q) {
@@ -219,13 +339,14 @@ void TabuSearch::search(int T, int Q, int TBL) {
       }
       t = 0;
       // TODO 禁忌表长度修改为定义
-      tabu.add_tabu_iter(min_iter_operated, 15);
+      tabu.add_tabu_iter(min_iter_operated, TBL);
       tabu.update_tabu();
       continue;
     } else if (min_iter_cost > best_cost) {
       t++;
       if (t == T) {
-        auto diversify = diversication(soluntion_set, iter_dic, 2);
+        auto diversify =
+            diversication(soluntion_set, iter_dic, DIVERSICATION_TIMES);
         auto dy0 = std::get<0>(diversify);
         auto dy1 = std::get<1>(diversify);
         q++;
@@ -242,23 +363,22 @@ void TabuSearch::search(int T, int Q, int TBL) {
         } else if (q == Q) {
           GreedyLocalSearch calculater(dy0, dy1);
           auto last_cost = calculater.tabu_cacl_cost();
-          if(last_cost <= best_cost){
+          if (last_cost <= best_cost) {
             iter_solution = dy0;
             iter_dic = dy1;
             best_cost = last_cost;
             cost_trend_.push_back(best_cost);
             break;
-          }else if(last_cost > best_cost){
+          } else if (last_cost > best_cost) {
             break;
           }
         }
-      }else if(t < T){
+      } else if (t < T) {
         tabu.update_tabu();
         continue;
       }
     }
   }
-  
-  // TODO 计算完毕的后置逻辑
-  // return {iter_solution,best_cost,cost_trend_};
+  iter_solution_ = iter_solution;
+  best_cost_ = best_cost;
 };
