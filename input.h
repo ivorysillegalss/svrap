@@ -16,12 +16,16 @@ struct Point {
   int x;
   int y;
 
-  bool operator==(const Point& other) const{
+  Point() : x(0), y(0) {}
+
+  Point(int x_, int y_) : x(x_), y(y_) {}
+
+  bool operator==(const Point &other) const {
     return x == other.x && y == other.y;
   }
 
-  bool operator!=(const Point& other) const{
-    return y != other.y && x != other.x; 
+  bool operator!=(const Point &other) const {
+    return y != other.y && x != other.x;
   }
 };
 

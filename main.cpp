@@ -93,8 +93,9 @@ int main() {
         locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
         greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
         greedy_searcher.get_route());
-    tabu_seracher.search(T_VALUE, Q_VALUE);
-    
+    tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
+                         TABU_LIST_LENGTH);
+
     // TODO 后续输出启发式最优路线耗时等逻辑
   } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;

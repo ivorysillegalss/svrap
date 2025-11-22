@@ -1,10 +1,13 @@
 #include "input.h"
+#include <map>
+#include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #define PATH_RELINKING_TIMES 50
 #define DIVERSIFICATION 3
-#define T_VALUE 50
-#define Q_VALUE 3
+#define TABU_LIST_LENGTH 15
 
 class TabuSearch {
 
@@ -16,7 +19,7 @@ public:
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<Point> &route);
 
-      void search(int T,int Q);
+  void search(int T, int Q, int TBL);
 
 private:
   std::vector<Point> locations_;
@@ -30,18 +33,30 @@ private:
   std::double_t solution_cost_;
 
   void diversication();
-  void operation_style();
+  // TODO 返回值类型优雅设置为类 对应原py代码中
+  // operation_style_all =
+  // [route,dic,newroute_cost,[twooptvertice[0],twooptvertice[1]]]的返回结构
+  std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
+             double, std::vector<Point>>
+  operation_style();
   void path_relinking();
-};  
+};
 
+class TabuInfo {
+private:
+  std::vector<std::variant<std::vector<Point>,
+                           std::pair<std::vector<Point>, std::vector<Point>>>>
+      tabu_list;
+  std::vector<int> tabu_time;
+  int tabu_limit;
 
-
-class TabuInfo{
-  private:
-    std::vector<Point> tabuList;
-    std::vector<int> tabuTime;
-    int tabu_limit;
-  public:
-    // 更新禁忌表内容及长度（动态修改数组长度）
-    void update_tabu();
+public:
+  // 更新禁忌表内容及长度（动态修改数组长度）
+  void update_tabu();
+  void set_limit(int new_limit);
+  explicit TabuInfo(int tabu_limit);
+  bool
+  is_tabu_iter(std::variant<std::vector<Point>,
+                            std::pair<std::vector<Point>, std::vector<Point>>>
+                   iter);
 };
