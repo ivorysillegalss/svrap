@@ -39,6 +39,9 @@ private:
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
   diversication(std::vector<std::vector<Point>> solution_set,
                 std::map<std::pair<int, int>, VertexInfo> iter_dic, int number);
+  std::tuple<std::vector<Point>, double>
+  path_relinking(std::vector<std::vector<Point>> solution_set,
+                 std::map<std::pair<int, int>, VertexInfo> iter_dic);
 
   // TODO 返回值类型优雅设置为类 对应原py代码中
   // operation_style_all =
@@ -46,8 +49,6 @@ private:
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
              double, std::vector<Point>>
   operation_style();
-
-  void path_relinking();
 };
 
 class TabuInfo {
@@ -57,7 +58,7 @@ private:
       tabu_list;
   std::vector<int> tabu_time;
   int tabu_limit;
-  int current_dabu_size;
+  int current_tabu_size;
 
 public:
   // 更新禁忌表内容及长度（动态修改数组长度）
@@ -70,4 +71,9 @@ public:
   is_tabu_iter(std::variant<std::vector<Point>,
                             std::pair<std::vector<Point>, std::vector<Point>>>
                    iter);
+  void
+  add_tabu_iter(std::variant<std::vector<Point>,
+                             std::pair<std::vector<Point>, std::vector<Point>>>
+                    iter,
+                int tabu_limit);
 };

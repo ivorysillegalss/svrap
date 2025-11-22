@@ -22,12 +22,12 @@ TabuSearch::TabuSearch(
   cost_trend_.push_back(cost);
 }
 
-void TabuInfo::add_tabu_num() { current_dabu_size++; }
+void TabuInfo::add_tabu_num() { current_tabu_size++; }
 
 void TabuInfo::reset_list() {
   tabu_list.clear();
   tabu_time.clear();
-  current_dabu_size = 0;
+  current_tabu_size = 0;
 }
 
 void TabuInfo::update_tabu() {
@@ -64,6 +64,16 @@ bool TabuInfo::is_tabu_iter(
                  std::pair<std::vector<Point>, std::vector<Point>>>
         iter) {
   return std::find(tabu_list.begin(), tabu_list.end(), iter) == tabu_list.end();
+}
+
+void TabuInfo ::add_tabu_iter(
+    std::variant<std::vector<Point>,
+                 std::pair<std::vector<Point>, std::vector<Point>>>
+        iter,
+    int tabu_limit) {
+  tabu_list.push_back(iter);
+  tabu_time.push_back(tabu_limit);
+  current_tabu_size++;
 }
 
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
@@ -149,7 +159,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
     std::size_t min_iter_cost_index = min_iter_cost_p - itercost.begin();
 
     auto min_iter_solution = operated_solution[min_iter_cost_index];
-    auto min_iter_idc = operated_dic[min_iter_cost_index];
+    auto min_iter_dic = operated_dic[min_iter_cost_index];
     auto min_iter_operated = iterchange[min_iter_cost_index];
 
     if (min_iter_cost <= best_cost && tabu.is_tabu_iter(min_iter_operated)) {
@@ -188,9 +198,67 @@ void TabuSearch::search(int T, int Q, int TBL) {
         tabu.update_tabu();
         continue;
       }
-    } else if (min_iter_cost <= best_cost && tabu.is_tabu_iter(min_iter_operated)){
+    } else if (min_iter_cost <= best_cost &&
+               tabu.is_tabu_iter(min_iter_operated)) {
       soluntion_set.push_back(min_iter_solution);
       // 路径重连部分
+      auto path_relink = path_relinking(soluntion_set, min_iter_dic);
+      auto pr0 = std::get<0>(path_relink);
+      auto pr1 = std::get<1>(path_relink);
+      if (pr1 <= min_iter_cost) {
+        soluntion_set.back() = pr0;
+        iter_solution = pr0;
+        iter_dic = min_iter_dic;
+        best_cost = pr1;
+        cost_trend_.push_back(best_cost);
+      } else if (pr1 > min_iter_cost) {
+        iter_solution = min_iter_solution;
+        iter_dic = min_iter_dic;
+        best_cost = min_iter_cost;
+        cost_trend_.push_back(best_cost);
+      }
+      t = 0;
+      // TODO 禁忌表长度修改为定义
+      tabu.add_tabu_iter(min_iter_operated, 15);
+      tabu.update_tabu();
+      continue;
+    } else if (min_iter_cost > best_cost) {
+      t++;
+      if (t == T) {
+        auto diversify = diversication(soluntion_set, iter_dic, 2);
+        auto dy0 = std::get<0>(diversify);
+        auto dy1 = std::get<1>(diversify);
+        q++;
+        if (q < Q) {
+          soluntion_set.push_back(dy0);
+          iter_solution = dy0;
+          iter_dic = dy1;
+          GreedyLocalSearch calculater(iter_solution, iter_dic);
+          best_cost = calculater.tabu_cacl_cost();
+          cost_trend_.push_back(best_cost);
+          t = 0;
+          tabu.reset_list();
+          continue;
+        } else if (q == Q) {
+          GreedyLocalSearch calculater(dy0, dy1);
+          auto last_cost = calculater.tabu_cacl_cost();
+          if(last_cost <= best_cost){
+            iter_solution = dy0;
+            iter_dic = dy1;
+            best_cost = last_cost;
+            cost_trend_.push_back(best_cost);
+            break;
+          }else if(last_cost > best_cost){
+            break;
+          }
+        }
+      }else if(t < T){
+        tabu.update_tabu();
+        continue;
+      }
     }
   }
+  
+  // TODO 计算完毕的后置逻辑
+  // return {iter_solution,best_cost,cost_trend_};
 };
