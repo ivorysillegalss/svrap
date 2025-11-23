@@ -2,9 +2,11 @@
 #include "greedy.h"
 #include "input.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
+#include <random>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -12,22 +14,12 @@
 
 // 指选出两条最不相似的路径
 #define DIVERSICATION_TIMES 2
+#define ADD 1
+#define DROP 2
+#define TWOOPT 3
+#define N 51
 
-TabuSearch::TabuSearch(
-    const std::vector<Point> &locations,
-    const std::vector<std::vector<double>> &distance,
-    const std::vector<Point> &ontour, const std::vector<Point> &offtour,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-    const std::vector<Point> &route, const std::double_t &cost)
-    : locations_(locations), distance_(distance), ontour_(ontour),
-      offtour_(offtour), vertex_map_(vertex_map), route_(route),
-      solution_cost_(cost) {
-  cost_trend_.push_back(cost);
-}
-
-std::vector<int> TabuSearch::get_len_trend() { return cost_trend_; }
-std::vector<Point> TabuSearch::get_iter_solution() { return iter_solution_; }
-std::double_t TabuSearch::get_best_cost() { return best_cost_; }
+static std::mt19937 rng(std::random_device{}());
 
 void TabuInfo::add_tabu_num() { current_tabu_size++; }
 
@@ -81,6 +73,177 @@ void TabuInfo ::add_tabu_iter(
   tabu_list.push_back(iter);
   tabu_time.push_back(tabu_limit);
   current_tabu_size++;
+}
+
+TabuSearch::TabuSearch(
+    const std::vector<Point> &locations,
+    const std::vector<std::vector<double>> &distance,
+    const std::vector<Point> &ontour, const std::vector<Point> &offtour,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<Point> &route, const std::double_t &cost)
+    : locations_(locations), distance_(distance), ontour_(ontour),
+      offtour_(offtour), vertex_map_(vertex_map), route_(route),
+      solution_cost_(cost) {
+  cost_trend_.push_back(cost);
+}
+
+std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
+           double, std::vector<Point>>
+TabuSearch ::operation_style(
+    std::vector<Point> route,
+    std::map<std::pair<int, int>, VertexInfo> iter_dic) {
+  // 三个操作中随机选择一个
+  std::array<int, 3> choices = {ADD, DROP, TWOOPT};
+  std::uniform_int_distribution<int> dist(0, choices.size() - 1);
+  int style_number = choices[dist(rng)];
+
+  // 如果是增加点
+  if (style_number == ADD) {
+    auto add_dic = iter_dic;
+    Point add_vertice;
+    while (true) {
+      // 随机选举一个点
+      int add_index = std::uniform_int_distribution<int>(0, N - 1)(rng);
+      // 构造该点的 key
+      std::pair<int, int> key = {locations_[add_index].x,
+                                 locations_[add_index].y};
+      auto it = add_dic.find(key);
+      if (it != add_dic.end() && it->second.status == "不在路径中") {
+        add_vertice = locations_[add_index];
+        break;
+      } else {
+        continue;
+      }
+    }
+    for (const auto &kv : iter_dic) {
+      const std::pair<int, int> &key = kv.first;
+      const VertexInfo &value = kv.second;
+      if (key == std::make_pair(add_vertice.x, add_vertice.y)) {
+        auto value01 = VertexInfo(value.index, "在路径中");
+        add_dic[key] = value01;
+      }
+    }
+    for (auto &kv : iter_dic) {
+      const std::pair<int, int> &key = kv.first;
+      VertexInfo &value = kv.second;
+      // if(key == std::make_pair(add_vertice.x,add_vertice.y)){
+      //   auto value01 = VertexInfo(value.index,"在路径中");
+      //   add_dic[key] = value01;
+      // }
+      if (value.status == "不在路径中") {
+        auto f_route = route;
+        f_route.push_back(add_vertice);
+
+        // 对应
+        // av_cost_add = [distance[value[0]][add_dic[other][0]] for other in
+        // froute]
+        std::vector<double> av_cost_add;
+        av_cost_add.reserve(f_route.size());
+        for (const Point &other : f_route) {
+          int from_idx = value.index; // 要插入的点的 index
+          int to_idx =
+              add_dic.at({other.x, other.y}).index; // 路径上已有点的 index
+          av_cost_add.push_back(distance_[from_idx][to_idx]);
+        }
+
+        auto min_cost_p =
+            std::min_element(av_cost_add.begin(), av_cost_add.end());
+        double min_cost = *min_cost_p;
+        double min_cost_index = std::distance(av_cost_add.begin(), min_cost_p);
+        auto min_vertice = f_route[min_cost_index];
+        value.best_vertex = min_vertice;
+        value.best_cost = min_cost;
+      }
+    }
+
+    std::vector<int> cost_list;
+    int len_route = route.size();
+
+    for (int i = 0; i < len_route + 1; i++) {
+      auto f_route = route;
+      auto new_route = f_route;
+      new_route.insert(new_route.begin() + i, add_vertice);
+      GreedyLocalSearch cal(new_route, add_dic);
+      double i_cost = cal.tabu_cacl_cost();
+      cost_list.push_back(i_cost);
+    }
+    auto min_cost_p = std::min_element(cost_list.begin(), cost_list.end());
+    double min_cost = *min_cost_p;
+    double min_cost_index = std::distance(cost_list.begin(), min_cost_p);
+    auto new_route = route;
+    new_route.insert(new_route.begin() + min_cost_index, add_vertice);
+    auto new_dic = add_dic;
+
+    // auto desc = std::string("取(") + std::to_string(add_vertice.x) + "," +
+    //             std::to_string(add_vertice.y) + ")";
+
+    std::vector<Point> a;
+    // TODO 增加删除的时候返回字符串信息
+    return {new_route, new_dic, min_cost, a};
+
+  } else if (style_number == DROP) {
+    auto drop_dic = iter_dic;
+    auto d_route = route;
+    int len_route = d_route.size();
+    // 随机选举一个点
+    int drop_index = std::uniform_int_distribution<int>(0, len_route - 1)(rng);
+    auto d_vertice = d_route[drop_index];
+    auto drop_route = d_route; // 自动深拷贝
+    drop_route.erase(
+        std::remove(drop_route.begin(), drop_route.end(), d_vertice),
+        drop_route.end());
+    auto dt = std::make_pair(d_vertice.x, d_vertice.y);
+    auto d_vertice_value =
+        VertexInfo(drop_dic[dt].index, "不在路径中", d_vertice, 0);
+    drop_dic[dt] = d_vertice_value;
+
+    for (auto &kv : iter_dic) {
+      const std::pair<int, int> &key = kv.first;
+      VertexInfo &value = kv.second;
+      if (value.status == "不在路径中" && value.best_vertex == d_vertice) {
+
+        // 对应
+        // vl_cost_dv = [distance[value[0]][drop_dic[other][0]] for other in
+        // drop_route]
+        std::vector<double> vl_cost_dv;
+        vl_cost_dv.reserve(drop_route.size());
+        for (const Point &other : drop_route) {
+          int from_idx = value.index; // 要插入的点的 index
+          int to_idx =
+              drop_dic.at({other.x, other.y}).index; // 路径上已有点的 index
+          vl_cost_dv.push_back(distance_[from_idx][to_idx]);
+        }
+
+        auto min_cost_p =
+            std::min_element(vl_cost_dv.begin(), vl_cost_dv.end());
+        double min_cost = *min_cost_p;
+        double min_cost_index = std::distance(vl_cost_dv.begin(), min_cost_p);
+        auto min_vertice = drop_route[min_cost_index];
+        value.best_vertex = min_vertice;
+        value.best_cost = min_cost;
+
+        GreedyLocalSearch cal(drop_route, drop_dic);
+        double i_cost = cal.tabu_cacl_cost();
+
+        // auto desc = std::string("取(") + std::to_string(add_vertice.x) + ","
+        // +
+        //             std::to_string(add_vertice.y) + ")";
+
+        std::vector<Point> a;
+        // TODO 增加删除的时候返回字符串信息
+        return {drop_route, drop_dic, min_cost, a};
+      }
+    }
+  } else if (style_number == TWOOPT) {
+    std::vector<std::size_t> idx(2);
+    std::sample(route.begin(), route.end(), idx.begin(), 2, rng);
+    std::swap(route[idx[0]], route[idx[1]]);
+    GreedyLocalSearch cal(route, iter_dic);
+    double i_cost = cal.tabu_cacl_cost();
+    // TODO 或许可以更改为仅记录索引？
+    std::vector<Point> twoopt_v = {route[idx[0]], route[idx[1]]};
+    return {route, iter_dic, i_cost, twoopt_v};
+  }
 }
 
 std::tuple<std::vector<Point>, double>
@@ -341,6 +504,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
   // t q 代表当前已经执行了路径重连和多样化的次数
   std::vector<std::vector<Point>> soluntion_set{route_};
   // 所有历史最优解（需要存储一个列表 最后在这个列表的基础上进行比较得出）
+  // 对应itersolution = copy.copy(firstsolution)
   std::vector<Point> iter_solution = route_;
   // 当前的迭代解
   std::map<std::pair<int, int>, VertexInfo> iter_dic = vertex_map_;
@@ -370,10 +534,11 @@ void TabuSearch::search(int T, int Q, int TBL) {
 
     // 记录当前找到的最优邻域解的个数
     while (times < 50) {
-      auto neighbor_solution = operation_style();
+      // 这里的route就是greedy中的初始解 后方计算后将他设置为iter_solution
+      auto iter_sol = iter_solution;
+      auto neighbor_solution = operation_style(iter_sol, iter_dic);
       // 通过进行操作 生成邻域数据
       auto &op = std::get<3>(neighbor_solution);
-      bool valid = false;
 
       // 检查正逆序是否已经尝试
       if (op.size() == 2) {
@@ -384,7 +549,6 @@ void TabuSearch::search(int T, int Q, int TBL) {
                 iterchange.end() &&
             std::find(iterchange.begin(), iterchange.end(), pair2) ==
                 iterchange.end()) {
-          valid = true;
           // op 非{int ,int}类型 需修改iterchange 进行后续邻域解处理
           // Point p = {op,rev};
           itercost.push_back(std::get<2>(neighbor_solution));

@@ -1,6 +1,7 @@
 #include "input.h"
 #include <cmath>
 #include <map>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -17,9 +18,9 @@ public:
       const std::vector<Point> &route, const std::double_t &cost);
 
   void search(int T, int Q, int TBL);
-  std::vector<int> get_len_trend();
-  std::vector<Point> get_iter_solution();
-  std::double_t get_best_cost();
+  const std::vector<int> &get_len_trend() const { return cost_trend_; }
+  const std::vector<Point> &get_iter_solution() const { return iter_solution_; }
+  double get_best_cost() const { return best_cost_; }
 
 private:
   // 最优解所对应成本的变化趋势
@@ -48,9 +49,17 @@ private:
   // TODO 返回值类型优雅设置为类 对应原py代码中
   // operation_style_all =
   // [route,dic,newroute_cost,[twooptvertice[0],twooptvertice[1]]]的返回结构
+  // (这里第四项有可能是string 也有可能是两个point)
+  // using OperationDesc =
+  //     std::variant<std::monostate,          // 没操作（备用）
+  //                  std::vector<std::string>,             // 比如 "取(3,4)",
+  //                  "删(5,6)" std::vector<Point>       // 或者你喜欢
+  //                  vector<Point>{p1, p2}
+  //                  >;
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
              double, std::vector<Point>>
-  operation_style();
+  operation_style(std::vector<Point> iter_sol,
+                  std::map<std::pair<int, int>, VertexInfo> iter_dic);
 };
 
 class TabuInfo {

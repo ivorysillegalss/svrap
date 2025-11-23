@@ -36,8 +36,8 @@ struct VertexInfo {
   Point best_vertex;  // 记录当前最优路径的上一个顶点
   double best_cost;   // 记录从起点到当前顶点的最小代价（贪心）
 
-  VertexInfo(size_t idx, const std::string &st)
-      : index(idx), status(st), best_vertex({0, 0}), best_cost(0.0) {}
+  // VertexInfo(size_t idx, const std::string &st)
+  //     : index(idx), status(st), best_vertex({0, 0}), best_cost(0.0) {}
   VertexInfo(size_t idx = 0, const std::string &st = "", Point bv = {0, 0},
              double bc = 0.0)
       : index(idx), status(st), best_vertex(bv), best_cost(bc) {}
