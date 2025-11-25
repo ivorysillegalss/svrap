@@ -221,19 +221,20 @@ TabuSearch ::operation_style(
         auto min_vertice = drop_route[min_cost_index];
         value.best_vertex = min_vertice;
         value.best_cost = min_cost;
-
-        GreedyLocalSearch cal(drop_route, drop_dic);
-        double i_cost = cal.tabu_cacl_cost();
-
-        // auto desc = std::string("取(") + std::to_string(add_vertice.x) + ","
-        // +
-        //             std::to_string(add_vertice.y) + ")";
-
-        std::vector<Point> a;
-        // TODO 增加删除的时候返回字符串信息
-        return {drop_route, drop_dic, min_cost, a};
       }
     }
+
+    GreedyLocalSearch cal(drop_route, drop_dic);
+    double i_cost = cal.tabu_cacl_cost();
+
+    // auto desc = std::string("取(") + std::to_string(add_vertice.x) + ","
+    // +
+    //             std::to_string(add_vertice.y) + ")";
+
+    std::vector<Point> a;
+    // TODO 增加删除的时候返回字符串信息
+    return {drop_route, drop_dic, i_cost, a};
+
   } else if (style_number == TWOOPT) {
     std::vector<std::size_t> idx(2);
     std::sample(route.begin(), route.end(), idx.begin(), 2, rng);
@@ -243,6 +244,9 @@ TabuSearch ::operation_style(
     // TODO 或许可以更改为仅记录索引？
     std::vector<Point> twoopt_v = {route[idx[0]], route[idx[1]]};
     return {route, iter_dic, i_cost, twoopt_v};
+  } else {
+    // panic
+    return {{}, {}, {}, {}};
   }
 }
 

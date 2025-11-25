@@ -105,6 +105,7 @@ int main() {
     auto len_trend = tabu_seracher.get_len_trend();
     auto iter_solution = tabu_seracher.get_iter_solution();
     double best_cost = tabu_seracher.get_best_cost();
+    std::cout << "最优解值为" << best_cost << ")\n";
 
     // TODO 后续输出启发式最优路线耗时等逻辑
   } catch (const std::exception &e) {
