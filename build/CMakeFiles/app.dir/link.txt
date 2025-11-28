@@ -1,0 +1,1 @@
+/usr/bin/g++ -g -O0 -Wall CMakeFiles/app.dir/greedy.cpp.o CMakeFiles/app.dir/input.cpp.o CMakeFiles/app.dir/main.cpp.o CMakeFiles/app.dir/tabu_search.cpp.o -o app 

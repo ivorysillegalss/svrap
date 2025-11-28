@@ -1,0 +1,26 @@
+[
+{
+  "directory": "/home/czc/svrap/build",
+  "command": "/usr/bin/g++   -g -O0 -Wall -std=gnu++17 -o CMakeFiles/app.dir/greedy.cpp.o -c /home/czc/svrap/greedy.cpp",
+  "file": "/home/czc/svrap/greedy.cpp",
+  "output": "CMakeFiles/app.dir/greedy.cpp.o"
+},
+{
+  "directory": "/home/czc/svrap/build",
+  "command": "/usr/bin/g++   -g -O0 -Wall -std=gnu++17 -o CMakeFiles/app.dir/input.cpp.o -c /home/czc/svrap/input.cpp",
+  "file": "/home/czc/svrap/input.cpp",
+  "output": "CMakeFiles/app.dir/input.cpp.o"
+},
+{
+  "directory": "/home/czc/svrap/build",
+  "command": "/usr/bin/g++   -g -O0 -Wall -std=gnu++17 -o CMakeFiles/app.dir/main.cpp.o -c /home/czc/svrap/main.cpp",
+  "file": "/home/czc/svrap/main.cpp",
+  "output": "CMakeFiles/app.dir/main.cpp.o"
+},
+{
+  "directory": "/home/czc/svrap/build",
+  "command": "/usr/bin/g++   -g -O0 -Wall -std=gnu++17 -o CMakeFiles/app.dir/tabu_search.cpp.o -c /home/czc/svrap/tabu_search.cpp",
+  "file": "/home/czc/svrap/tabu_search.cpp",
+  "output": "CMakeFiles/app.dir/tabu_search.cpp.o"
+}
+]

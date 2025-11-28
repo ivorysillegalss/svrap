@@ -85,11 +85,12 @@ int main() {
     // 构建点信息集
     std::map<std::pair<int, int>, VertexInfo> vertex_map;
     build_vertex_map(locations, ontour, offtour, distance, vertex_map);
-    std::cout << "Build points info" << std::endl;
+    std::cout << "Build points info done" << std::endl;
 
     // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
     GreedyLocalSearch greedy_searcher =
         greedy_local_search(ontour, offtour, distance, vertex_map, locations);
+    std::cout << "Greedy search done" << std::endl;
 
     // TODO 创建搜索上下文结构体 searchctx
 
@@ -98,6 +99,8 @@ int main() {
         locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
         greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
         greedy_searcher.get_route(), greedy_searcher.get_cost());
+
+    std::cout << "Tabu search start" << std::endl;
 
     tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
                          TABU_LIST_LENGTH);

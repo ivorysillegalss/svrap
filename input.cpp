@@ -14,9 +14,11 @@
 #include <vector>
 
 // 读取数据
-void read_coordinates(const std::string& filename, std::vector<Point>& locations) {
-// std::vector<Point> read_coordinates(const std::string& filename, std::vector<Point>& locations) {
-//   std::vector<Point> locations;
+void read_coordinates(const std::string &filename,
+                      std::vector<Point> &locations) {
+  // std::vector<Point> read_coordinates(const std::string& filename,
+  // std::vector<Point>& locations) {
+  //   std::vector<Point> locations;
   std::ifstream file(filename);
 
   // fd是否打开
@@ -59,11 +61,13 @@ void read_coordinates(const std::string& filename, std::vector<Point>& locations
 }
 
 // 将点放置到距离矩阵当中
-// std::vector<std::vector<double>> compute_distance(const std::vector<Point> &locations) {
-void compute_distance(const std::vector<Point> &locations,std::vector<std::vector<double>> distance) {
+void compute_distances(const std::vector<Point> &locations,
+                       std::vector<std::vector<double>> &distance) {
   size_t n = locations.size();
-//   std::vector<std::vector<double>> distance(n, std::vector<double>(n, 0.0));
-
+  //   std::vector<std::vector<double>> distance(n, std::vector<double>(n,
+  //   0.0));
+  distance.assign(n, std::vector<double>(n, 0.0));
+  
   for (size_t i = 0; i < n; ++i) {
     for (size_t j = 0; j < n; ++j) {
       if (i == j) {
@@ -114,14 +118,15 @@ void build_vertex_map(const std::vector<Point> &locations,
     point_to_index[{locations[i].x, locations[i].y}] = i;
   }
 
-//   遍历所有位置点 并且初根据是否在路径中始化他们的状态
+  //   遍历所有位置点 并且初根据是否在路径中始化他们的状态
   for (const auto &point : locations) {
     std::pair<int, int> key = {point.x, point.y};
 
     // TODO 修改为使用std::unordered_set对点存储 O(n) -> O(1)
     // 这里的逻辑是对每个点 find查找在路径点上的集合 判断这个点是否在集合上
     // find_if的逻辑是 查询的起始终止 查询的条件
-    // 如果查到了就返回对应的索引 没查到则为列表末尾 —— 通过判断是否末尾判断当前点是否在路径当中
+    // 如果查到了就返回对应的索引 没查到则为列表末尾 ——
+    // 通过判断是否末尾判断当前点是否在路径当中
     if (std::find_if(on_vertices.begin(), on_vertices.end(),
                      [&point](const Point &p) {
                        return p.x == point.x && point.y == p.y;

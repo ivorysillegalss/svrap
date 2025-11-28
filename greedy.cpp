@@ -124,6 +124,11 @@ GreedyLocalSearch::GreedyLocalSearch(
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route) {}
 
+GreedyLocalSearch::GreedyLocalSearch(
+  const std::vector<Point> &route,
+  const std::map<std::pair<int,int>, VertexInfo> &vertex_map 
+):route_(route), vertex_map_(vertex_map){}
+
 void GreedyLocalSearch::add(const Point &vertex, size_t index) {
   if (index > route_.size()) {
     throw std::out_of_range(
@@ -172,6 +177,7 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
 double
 GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   if (route.empty()) {
+    // 贪婪搜索有几率报错
     throw std::invalid_argument("nil route, can't calculate");
   }
   double total_cost = 0.0;
@@ -181,7 +187,7 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     size_t index1, index2;
     try {
       index1 = vertex_map_.at(key1).index;
-      index1 = vertex_map_.at(key2).index;
+      index2 = vertex_map_.at(key2).index;
     } catch (const std::out_of_range &e) {
       throw std::runtime_error(
           "can't find point (" + std::to_string(key1.first) + ", " +
@@ -195,7 +201,7 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     std::pair<int, int> key_last = {route.back().x, route.back().y};
     size_t index_first, index_last;
     index_first = vertex_map_.at(key_first).index;
-    index_first = vertex_map_.at(key_last).index;
+    index_last = vertex_map_.at(key_last).index;
     total_cost += distance_[index_first][index_last];
   }
   for (const auto &entry : vertex_map_) {

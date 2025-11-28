@@ -21,6 +21,8 @@
 
 static std::mt19937 rng(std::random_device{}());
 
+TabuInfo::TabuInfo(int tb) { tabu_limit = tb; }
+
 void TabuInfo::add_tabu_num() { current_tabu_size++; }
 
 void TabuInfo::reset_list() {
@@ -30,7 +32,7 @@ void TabuInfo::reset_list() {
 }
 
 void TabuInfo::update_tabu() {
-  for (int i = 0; i < tabu_time.size(); ++i) {
+  for (size_t i = 0; i < tabu_time.size(); ++i) {
     tabu_time[i]--;
     if (tabu_time[i] == 0) {
       tabu_list[i] = std::vector<Point>{};
@@ -236,12 +238,19 @@ TabuSearch ::operation_style(
     return {drop_route, drop_dic, i_cost, a};
 
   } else if (style_number == TWOOPT) {
+
+    // 随机采样索引 将指定索引内容swap
     std::vector<std::size_t> idx(2);
-    std::sample(route.begin(), route.end(), idx.begin(), 2, rng);
-    std::swap(route[idx[0]], route[idx[1]]);
+    // std::sample(route.begin(), route.end(), std::back_inserter(idx), 2, rng);
+    // std::swap(route[idx[0]], route[idx[1]]);
+    std::vector<size_t> indices(route.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sample(indices.begin(), indices.end(), std::back_inserter(idx), 2,
+                rng);
+
     GreedyLocalSearch cal(route, iter_dic);
     double i_cost = cal.tabu_cacl_cost();
-    // TODO 或许可以更改为仅记录索引？
+    // TODO 或许可以更改为仅记录索引？ 目前为记录交换点的点集
     std::vector<Point> twoopt_v = {route[idx[0]], route[idx[1]]};
     return {route, iter_dic, i_cost, twoopt_v};
   } else {
@@ -303,7 +312,7 @@ TabuSearch::path_relinking(std::vector<std::vector<Point>> solution_set,
   std::vector<double> vertice_probability;
   vertice_probability.reserve(state_change.size());
 
-  int len_sc = state_change.size();
+  size_t len_sc = state_change.size();
   for (size_t i = 0; i < len_sc; ++i) {
     const Point &p = state_change[i];
     bool is_in_current =
@@ -319,7 +328,7 @@ TabuSearch::path_relinking(std::vector<std::vector<Point>> solution_set,
   }
 
   auto temp_solution = last_solution;
-  for (int i = 0; i < len_sc; i++) {
+  for (size_t i = 0; i < len_sc; i++) {
     auto max_probability_p = std::max_element(vertice_probability.begin(),
                                               vertice_probability.end());
     double max_probability = *max_probability_p;
@@ -332,7 +341,7 @@ TabuSearch::path_relinking(std::vector<std::vector<Point>> solution_set,
                   state_change[max_index]) != current_solution.end()) {
 
       std::vector<double> cost_list;
-      for (int i = 0; i < temp_solution.size() + 1; i++) {
+      for (size_t i = 0; i < temp_solution.size() + 1; i++) {
         double i_cost = 0;
         auto f_route = temp_solution;
         // 插入算子
@@ -389,7 +398,7 @@ TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
   auto current_solution = solution_set.back();
   std::vector<Point> on_vertice;
   std::vector<Point> off_vertice;
-  for (int i = 0; i < locations_.size(); i++) {
+  for (size_t i = 0; i < locations_.size(); i++) {
     auto loc = locations_.at(i);
     if (std::find(current_solution.begin(), current_solution.end(), loc) ==
         current_solution.end()) {
@@ -401,24 +410,25 @@ TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
   std::vector<double> onvert_probability;
   std::vector<double> offvert_probability;
   int len_set = solution_set.size();
-  for (int i = 0; i < on_vertice.size(); i++) {
+  for (size_t i = 0; i < on_vertice.size(); i++) {
     int onvert_pro = 0;
     auto onvert = on_vertice.at(i);
     for (int j = 0; j < len_set; j++) {
-      if (std::find(solution_set.begin(), solution_set.end(), onvert) ==
-          solution_set.end()) {
+      if (std::find(solution_set.at(j).begin(), solution_set.at(j).end(),
+                    onvert) == solution_set.at(j).end()) {
         onvert_pro++;
       }
     }
     onvert_probability.push_back(onvert_pro / len_set);
   }
 
-  for (int i = 0; i < off_vertice.size(); i++) {
+  for (size_t i = 0; i < off_vertice.size(); i++) {
     int offvert_pro = 0;
+    // TODO
     auto offvert = off_vertice.at(i);
     for (int j = 0; j < len_set; j++) {
-      if (std::find(solution_set.begin(), solution_set.end(), off_vertice) ==
-          solution_set.end()) {
+      if (std::find(solution_set.at(j).begin(), solution_set.at(j).end(),
+                    offvert) == solution_set.at(j).end()) {
         offvert_pro++;
       }
     }
@@ -547,8 +557,9 @@ void TabuSearch::search(int T, int Q, int TBL) {
       // 检查正逆序是否已经尝试
       if (op.size() == 2) {
         std::vector<Point> nerireverse = {op[1], op[0]};
-        auto pair1 = std::vector<std::vector<Point>>{{op, nerireverse}};
-        auto pair2 = std::vector<std::vector<Point>>{{nerireverse, op}};
+        // 数据类型为：std::pair<std::vector<Point>, std::vector<Point>>
+        OpKey pair1 = std::make_pair(op, nerireverse);
+        OpKey pair2 = std::make_pair(nerireverse, op);
         if (std::find(iterchange.begin(), iterchange.end(), pair1) ==
                 iterchange.end() &&
             std::find(iterchange.begin(), iterchange.end(), pair2) ==
@@ -558,16 +569,17 @@ void TabuSearch::search(int T, int Q, int TBL) {
           itercost.push_back(std::get<2>(neighbor_solution));
           operated_solution.push_back(std::get<0>(neighbor_solution));
           operated_dic.push_back(std::get<1>(neighbor_solution));
-          iterchange.emplace_back(std::make_pair(op, nerireverse));
+          iterchange.emplace_back(pair1);
           times++;
         }
       } else if (op.size() == 1) {
-        if (std::find(iterchange.begin(), iterchange.end(), op) ==
+        OpKey opk = op;
+        if (std::find(iterchange.begin(), iterchange.end(), opk) ==
             iterchange.end()) {
           itercost.push_back(std::get<2>(neighbor_solution));
           operated_solution.push_back(std::get<0>(neighbor_solution));
           operated_dic.push_back(std::get<1>(neighbor_solution));
-          iterchange.emplace_back(op);
+          iterchange.emplace_back(opk);
           times++;
         }
       }
