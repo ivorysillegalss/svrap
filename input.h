@@ -50,7 +50,7 @@ void compute_distances(const std::vector<Point> &locations,
                        std::vector<std::vector<double>> &distance);
 void classify_points(const std::vector<Point> &locations,
                      std::vector<Point> &ontour, std::vector<Point> &offtour,
-                     double_t A, double_t B, double_t boundary);
+                     double A, double B, double boundary);
 void build_vertex_map(const std::vector<Point> &locations,
                       const std::vector<Point> &on_vertices,
                       const std::vector<Point> &off_vertices,

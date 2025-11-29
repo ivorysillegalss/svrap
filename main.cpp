@@ -50,7 +50,7 @@ tabu_search(const std::vector<Point> &locations,
   TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route,
                     cost);
   return solver;
-};
+}
 
 int main() {
   try {

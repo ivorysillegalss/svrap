@@ -196,14 +196,14 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     }
     total_cost += distance_[index1][index2];
   }
-  if (route.size() > 1) {
-    std::pair<int, int> key_first = {route.front().x, route.front().y};
-    std::pair<int, int> key_last = {route.back().x, route.back().y};
-    size_t index_first, index_last;
-    index_first = vertex_map_.at(key_first).index;
-    index_last = vertex_map_.at(key_last).index;
-    total_cost += distance_[index_first][index_last];
-  }
+  // if (route.size() > 1) {
+  //   std::pair<int, int> key_first = {route.front().x, route.front().y};
+  //   std::pair<int, int> key_last = {route.back().x, route.back().y};
+  //   size_t index_first, index_last;
+  //   index_first = vertex_map_.at(key_first).index;
+  //   index_last = vertex_map_.at(key_last).index;
+  //   total_cost += distance_[index_first][index_last];
+  // }
   for (const auto &entry : vertex_map_) {
     if (entry.second.status == "N") {
       total_cost += 0.5 * entry.second.best_cost;

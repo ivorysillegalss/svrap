@@ -64,7 +64,7 @@ bool TabuInfo::is_tabu_iter(
     std::variant<std::vector<Point>,
                  std::pair<std::vector<Point>, std::vector<Point>>>
         iter) {
-  return std::find(tabu_list.begin(), tabu_list.end(), iter) == tabu_list.end();
+  return std::find(tabu_list.begin(), tabu_list.end(), iter) != tabu_list.end();
 }
 
 void TabuInfo ::add_tabu_iter(
@@ -110,7 +110,7 @@ TabuSearch ::operation_style(
       std::pair<int, int> key = {locations_[add_index].x,
                                  locations_[add_index].y};
       auto it = add_dic.find(key);
-      if (it != add_dic.end() && it->second.status == "不在路径中") {
+      if (it != add_dic.end() && it->second.status == "N") {
         add_vertice = locations_[add_index];
         break;
       } else {
@@ -121,7 +121,7 @@ TabuSearch ::operation_style(
       const std::pair<int, int> &key = kv.first;
       const VertexInfo &value = kv.second;
       if (key == std::make_pair(add_vertice.x, add_vertice.y)) {
-        auto value01 = VertexInfo(value.index, "在路径中");
+        auto value01 = VertexInfo(value.index, "Y");
         add_dic[key] = value01;
       }
     }
@@ -129,10 +129,10 @@ TabuSearch ::operation_style(
       const std::pair<int, int> &key = kv.first;
       VertexInfo &value = kv.second;
       // if(key == std::make_pair(add_vertice.x,add_vertice.y)){
-      //   auto value01 = VertexInfo(value.index,"在路径中");
+      //   auto value01 = VertexInfo(value.index,"Y");
       //   add_dic[key] = value01;
       // }
-      if (value.status == "不在路径中") {
+      if (value.status == "N") {
         auto f_route = route;
         f_route.push_back(add_vertice);
 
@@ -196,13 +196,13 @@ TabuSearch ::operation_style(
         drop_route.end());
     auto dt = std::make_pair(d_vertice.x, d_vertice.y);
     auto d_vertice_value =
-        VertexInfo(drop_dic[dt].index, "不在路径中", d_vertice, 0);
+        VertexInfo(drop_dic[dt].index, "N", d_vertice, 0);
     drop_dic[dt] = d_vertice_value;
 
     for (auto &kv : iter_dic) {
       const std::pair<int, int> &key = kv.first;
       VertexInfo &value = kv.second;
-      if (value.status == "不在路径中" && value.best_vertex == d_vertice) {
+      if (value.status == "N" && value.best_vertex == d_vertice) {
 
         // 对应
         // vl_cost_dv = [distance[value[0]][drop_dic[other][0]] for other in
@@ -216,6 +216,7 @@ TabuSearch ::operation_style(
           vl_cost_dv.push_back(distance_[from_idx][to_idx]);
         }
 
+        // route为0or1的时候 remove会导致路径为空 此时这里寻找最小元素直接报错
         auto min_cost_p =
             std::min_element(vl_cost_dv.begin(), vl_cost_dv.end());
         double min_cost = *min_cost_p;
@@ -237,26 +238,68 @@ TabuSearch ::operation_style(
     // TODO 增加删除的时候返回字符串信息
     return {drop_route, drop_dic, i_cost, a};
 
-  } else if (style_number == TWOOPT) {
+  }
+  // else if (style_number == TWOOPT) {
 
-    // 随机采样索引 将指定索引内容swap
-    std::vector<std::size_t> idx(2);
-    // std::sample(route.begin(), route.end(), std::back_inserter(idx), 2, rng);
-    // std::swap(route[idx[0]], route[idx[1]]);
+  //   // 随机采样索引 将指定索引内容swap
+  //   std::vector<std::size_t> idx(2);
+  //   // std::sample(route.begin(), route.end(), std::back_inserter(idx), 2,
+  //   rng);
+  //   // std::swap(route[idx[0]], route[idx[1]]);
+  //   std::vector<size_t> indices(route.size());
+  //   std::iota(indices.begin(), indices.end(), 0);
+  //   std::sample(indices.begin(), indices.end(), std::back_inserter(idx), 2,
+  //               rng);
+
+  //   GreedyLocalSearch cal(route, iter_dic);
+  //   double i_cost = cal.tabu_cacl_cost();
+  //   // TODO 或许可以更改为仅记录索引？ 目前为记录交换点的点集
+  //   std::vector<Point> twoopt_v = {route[idx[0]], route[idx[1]]};
+  //   return {route, iter_dic, i_cost, twoopt_v};}
+  else if (style_number == TWOOPT) {
+    // 随机选两个不同的索引进行交换
     std::vector<size_t> indices(route.size());
     std::iota(indices.begin(), indices.end(), 0);
-    std::sample(indices.begin(), indices.end(), std::back_inserter(idx), 2,
-                rng);
+    std::vector<size_t> idx(2);
+    std::sample(indices.begin(), indices.end(), idx.begin(), 2, rng);
 
-    GreedyLocalSearch cal(route, iter_dic);
-    double i_cost = cal.tabu_cacl_cost();
-    // TODO 或许可以更改为仅记录索引？ 目前为记录交换点的点集
-    std::vector<Point> twoopt_v = {route[idx[0]], route[idx[1]]};
-    return {route, iter_dic, i_cost, twoopt_v};
+    size_t i = idx[0], j = idx[1];
+
+    // 真正执行交换 Python 是在原 route 上直接 swap
+    std::vector<Point> new_route = route; // 深拷贝
+    std::swap(new_route[i], new_route[j]);
+
+    // 计算交换后的真实成本（字典不变）
+    GreedyLocalSearch calculator(new_route, iter_dic);
+    double new_cost = calculator.tabu_cacl_cost();
+
+    // 记录被交换的两个点，用于禁忌表（顺序不重要，但要双向记录）
+    std::vector<Point> operated = {route[i], route[j]}; // 原顺序
+
+    return {new_route, iter_dic, new_cost, operated};
   } else {
     // panic
     return {{}, {}, {}, {}};
   }
+}
+
+std::vector<Point>
+best_insert_position(const Point &p, const std::vector<Point> &route,
+                     const std::map<std::pair<int, int>, VertexInfo> &dic) {
+  std::vector<Point> best_route = route;
+  double best_cost = std::numeric_limits<double>::max();
+
+  for (size_t i = 0; i <= route.size(); ++i) {
+    auto test_route = route;
+    test_route.insert(test_route.begin() + i, p);
+    GreedyLocalSearch calc(test_route, dic);
+    double cost = calc.tabu_cacl_cost();
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_route = test_route;
+    }
+  }
+  return best_route;
 }
 
 std::tuple<std::vector<Point>, double>
@@ -327,67 +370,93 @@ TabuSearch::path_relinking(std::vector<std::vector<Point>> solution_set,
     }
   }
 
+  // auto temp_solution = last_solution;
+  // for (size_t i = 0; i < len_sc; i++) {
+  //   auto max_probability_p = std::max_element(vertice_probability.begin(),
+  //                                             vertice_probability.end());
+  //   double max_probability = *max_probability_p;
+  //   int max_index =
+  //       std::distance(max_probability_p, vertice_probability.begin());
+
+  //   // TODO 感觉有一些find的语句条件写错了 记得review
+  //   // TODO 这些find全部可以更换为unsorted_set的count api
+  //   if (std::find(current_solution.begin(), current_solution.end(),
+  //                 state_change[max_index]) != current_solution.end()) {
+
+  //     std::vector<double> cost_list;
+  //     for (size_t i = 0; i < temp_solution.size() + 1; i++) {
+  //       double i_cost = 0;
+  //       auto f_route = temp_solution;
+  //       // 插入算子
+  //       f_route.insert(f_route.begin() + i, state_change[max_index]);
+  //       auto new_route = f_route;
+  //       // 1. 遍历相邻点对，累加边长（对应 Python 的 for j in
+  //       // range(len(new_route)-1)）
+  //       for (size_t j = 0; j + 1 < new_route.size(); ++j) {
+  //         int idx1 = iter_dic.at({new_route[j].x, new_route[j].y}).index;
+  //         int idx2 =
+  //             iter_dic.at({new_route[j + 1].x, new_route[j + 1].y}).index;
+  //         i_cost += distance_[idx1][idx2];
+  //       }
+
+  //       // 2. 加上闭合边：最后一个点 → 第一个点（TSP 闭环）
+  //       // 对应i_cost +=
+  //       distance[dic[new_route[0]][0]][dic[new_route[-1]][0]] if
+  //       (!new_route.empty()) {
+  //         int first_idx =
+  //             iter_dic.at({new_route.front().x, new_route.front().y}).index;
+  //         int last_idx =
+  //             iter_dic.at({new_route.back().x, new_route.back().y}).index;
+  //         i_cost += distance_[last_idx][first_idx];
+  //       }
+  //       cost_list.push_back(i_cost);
+  //     }
+  //     auto min_cost = std::min_element(cost_list.begin(), cost_list.end());
+  //     int min_index = std::distance(cost_list.begin(), min_cost);
+  //     temp_solution.insert(temp_solution.begin() + min_index,
+  //                          state_change[max_index]);
+  //     // 删除已处理的项目（完全等价于 Python 的几行 remove）
+  //     state_change.erase(state_change.begin() + max_index);
+  //     vertice_probability.erase(vertice_probability.begin() + max_index);
+  //   } else {
+
+  //     temp_solution.erase(std::remove(temp_solution.begin(),
+  //                                     temp_solution.end(),
+  //                                     state_change[max_index]),
+  //                         temp_solution.end());
+
+  //     // 删除已处理的项目（必须放在 remove 之后！）
+  //     state_change.erase(state_change.begin() + max_index);
+  //     vertice_probability.erase(vertice_probability.begin() + max_index);
+  //   }
+  // }
   auto temp_solution = last_solution;
-  for (size_t i = 0; i < len_sc; i++) {
-    auto max_probability_p = std::max_element(vertice_probability.begin(),
-                                              vertice_probability.end());
-    double max_probability = *max_probability_p;
-    int max_index =
-        std::distance(max_probability_p, vertice_probability.begin());
 
-    // TODO 感觉有一些find的语句条件写错了 记得review
-    // TODO 这些find全部可以更换为unsorted_set的count api
-    if (std::find(current_solution.begin(), current_solution.end(),
-                  state_change[max_index]) != current_solution.end()) {
+  for (size_t i = 0; i < len_sc; ++i) {
+    auto max_prob_it = std::max_element(vertice_probability.begin(),
+                                        vertice_probability.end());
+    size_t max_idx = std::distance(vertice_probability.begin(), max_prob_it);
 
-      std::vector<double> cost_list;
-      for (size_t i = 0; i < temp_solution.size() + 1; i++) {
-        double i_cost = 0;
-        auto f_route = temp_solution;
-        // 插入算子
-        f_route.insert(f_route.begin() + i, state_change[max_index]);
-        auto new_route = f_route;
-        // 1. 遍历相邻点对，累加边长（对应 Python 的 for j in
-        // range(len(new_route)-1)）
-        for (size_t j = 0; j + 1 < new_route.size(); ++j) {
-          int idx1 = iter_dic.at({new_route[j].x, new_route[j].y}).index;
-          int idx2 =
-              iter_dic.at({new_route[j + 1].x, new_route[j + 1].y}).index;
-          i_cost += distance_[idx1][idx2];
-        }
+    Point p = state_change[max_idx];
 
-        // 2. 加上闭合边：最后一个点 → 第一个点（TSP 闭环）
-        // 对应i_cost += distance[dic[new_route[0]][0]][dic[new_route[-1]][0]]
-        if (!new_route.empty()) {
-          int first_idx =
-              iter_dic.at({new_route.front().x, new_route.front().y}).index;
-          int last_idx =
-              iter_dic.at({new_route.back().x, new_route.back().y}).index;
-          i_cost += distance_[last_idx][first_idx];
-        }
-        cost_list.push_back(i_cost);
-      }
-      auto min_cost = std::min_element(cost_list.begin(), cost_list.end());
-      int min_index = std::distance(cost_list.begin(), min_cost);
-      temp_solution.insert(temp_solution.begin() + min_index,
-                           state_change[max_index]);
-      // 删除已处理的项目（完全等价于 Python 的几行 remove）
-      state_change.erase(state_change.begin() + max_index);
-      vertice_probability.erase(vertice_probability.begin() + max_index);
+    if (std::find(current_solution.begin(), current_solution.end(), p) !=
+        current_solution.end()) {
+      // 该点最终要在路径中 → 插入到当前 temp_solution 成本增加最小的位置
+      temp_solution = best_insert_position(p, temp_solution, iter_dic);
     } else {
-
-      temp_solution.erase(std::remove(temp_solution.begin(),
-                                      temp_solution.end(),
-                                      state_change[max_index]),
-                          temp_solution.end());
-
-      // 删除已处理的项目（必须放在 remove 之后！）
-      state_change.erase(state_change.begin() + max_index);
-      vertice_probability.erase(vertice_probability.begin() + max_index);
+      // 该点最终不在路径中 → 直接删除
+      temp_solution.erase(
+          std::remove(temp_solution.begin(), temp_solution.end(), p),
+          temp_solution.end());
     }
+
+    // 删除已处理的项目
+    state_change.erase(state_change.begin() + max_idx);
+    vertice_probability.erase(max_prob_it);
   }
   GreedyLocalSearch calculater(temp_solution, iter_dic);
   double relinkcost = calculater.tabu_cacl_cost();
+  // GreedyLocalSearch(temp_solution, iter_dic).tabu_cacl_cost()
   return {{temp_solution}, {relinkcost}};
 }
 
@@ -465,12 +534,12 @@ TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
 
     // 换出
     iter_dic[key(max_onvert)] = VertexInfo(iter_dic[key(max_onvert)].index,
-                                           "不在路径中", Point{0, 0}, 0.0);
+                                           "N", Point{0, 0}, 0.0);
 
     // 换进（如果不存在就自动插入）
     iter_dic[key(max_offvert)] = VertexInfo(
         iter_dic.count(key(max_offvert)) ? iter_dic[key(max_offvert)].index : 0,
-        "在路径中", Point{0, 0}, 0.0);
+        "Y", Point{0, 0}, 0.0);
 
     // 先保存要删的点
     // Point max_onvert = on_vertice[max_onvert_prob_index];
@@ -488,7 +557,7 @@ TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
     erase_val(on_vertice, max_onvert);
     erase_val(off_vertice, max_offvert);
     for (auto &[pt, info] : iter_dic) { // C++17 结构化绑定
-      if (info.status != "不在路径中")
+      if (info.status != "N")
         continue;
 
       double best_cost = std::numeric_limits<double>::max();
@@ -516,7 +585,9 @@ TabuSearch::diversication(std::vector<std::vector<Point>> solution_set,
 void TabuSearch::search(int T, int Q, int TBL) {
   int t = 0, q = 0;
   // t q 代表当前已经执行了路径重连和多样化的次数
-  std::vector<std::vector<Point>> soluntion_set{route_};
+  // std::vector<std::vector<Point>> soluntion_set = {route_};
+  std::vector<std::vector<Point>> soluntion_set;
+  soluntion_set.push_back(route_);
   // 所有历史最优解（需要存储一个列表 最后在这个列表的基础上进行比较得出）
   // 对应itersolution = copy.copy(firstsolution)
   std::vector<Point> iter_solution = route_;

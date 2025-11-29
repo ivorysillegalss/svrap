@@ -1,2 +1,44 @@
-CMakeList.txt
-build.log
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln
+
+# Ignore build artifacts
+build/
+bin/
+obj/
+
+# Ignore temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+
+# Ignore compiled object files and executables
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Ignore CMake/Make build files
+CMakeLists.txt.user
+Makefile.user
+
+# Ignore clangd index
+.cache/clangd/
+
+# Ignore all text files that are specific to data
+tsp数据坐标集.txt
+
+# Ignore dependency directories
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Ignore MacOS specific files
+.DS_Store
+
+# Ignore Windows specific files
+Thumbs.db

@@ -67,12 +67,13 @@ void compute_distances(const std::vector<Point> &locations,
   //   std::vector<std::vector<double>> distance(n, std::vector<double>(n,
   //   0.0));
   distance.assign(n, std::vector<double>(n, 0.0));
-  
+
   for (size_t i = 0; i < n; ++i) {
     for (size_t j = 0; j < n; ++j) {
       if (i == j) {
         // 将当前的所有值设置为对应的上限
-        distance[i][j] = std::numeric_limits<double>::max();
+        // distance[i][j] = std::numeric_limits<double>::max();
+        distance[i][j] = 0.0;
       } else {
         double dx = static_cast<double>(locations[i].x - locations[j].x);
         double dy = static_cast<double>(locations[i].y - locations[j].y);
@@ -87,7 +88,7 @@ void compute_distances(const std::vector<Point> &locations,
 // ontour 区域内的点 offtour 特定区域外的点
 void classify_points(const std::vector<Point> &locations,
                      std::vector<Point> &ontour, std::vector<Point> &offtour,
-                     double_t A, double_t B, double_t boundary) {
+                     double A, double B, double boundary) {
   ontour.clear();
   offtour.clear();
   for (const auto &point : locations) {
@@ -131,9 +132,9 @@ void build_vertex_map(const std::vector<Point> &locations,
                      [&point](const Point &p) {
                        return p.x == point.x && point.y == p.y;
                      }) != on_vertices.end()) {
-      vertex_map[key] = VertexInfo(point_to_index[key], "在路径中");
+      vertex_map[key] = VertexInfo(point_to_index[key], "Y");
     } else {
-      vertex_map[key] = VertexInfo(point_to_index[key], "不在路径中");
+      vertex_map[key] = VertexInfo(point_to_index[key], "N");
     }
   }
 }
