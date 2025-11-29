@@ -1,3 +1,0 @@
-/home/czc/svrap/build/CMakeFiles/app.dir
-/home/czc/svrap/build/CMakeFiles/edit_cache.dir
-/home/czc/svrap/build/CMakeFiles/rebuild_cache.dir
