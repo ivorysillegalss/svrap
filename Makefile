@@ -27,7 +27,7 @@ $(TARGET): $(SOURCES)
 	@$(CXX) $(CXXFLAGS) *.cpp -o $@ 2>> $(BUILD_LOG) && echo "Build successful" || (echo "Build FAILED! See $(BUILD_LOG)"; tail -20 $(BUILD_LOG); exit 1)
 
 clean:
-	@rm -f $(TARGET) *.o $(RUN_LOG)
+	@rm -f $(TARGET) *.o
 	@echo "Clean done"
 
 # 只看运行日志
