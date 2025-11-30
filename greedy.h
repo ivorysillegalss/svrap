@@ -28,7 +28,8 @@ public:
 
   explicit GreedyLocalSearch(
       const std::vector<Point> &route,
-      const std::map<std::pair<int, int>, VertexInfo> &vertex_map);
+      const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+      const std::vector<std::vector<double>> &distance);
 
   double search();
   double tabu_cacl_cost();

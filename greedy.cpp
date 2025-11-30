@@ -125,9 +125,10 @@ GreedyLocalSearch::GreedyLocalSearch(
       offtour_(offtour), vertex_map_(vertex_map), route_(route) {}
 
 GreedyLocalSearch::GreedyLocalSearch(
-  const std::vector<Point> &route,
-  const std::map<std::pair<int,int>, VertexInfo> &vertex_map 
-):route_(route), vertex_map_(vertex_map){}
+    const std::vector<Point> &route,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<std::vector<double>> &distance)
+    : distance_(distance), vertex_map_(vertex_map), route_(route) {}
 
 void GreedyLocalSearch::add(const Point &vertex, size_t index) {
   if (index > route_.size()) {
@@ -196,14 +197,6 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     }
     total_cost += distance_[index1][index2];
   }
-  // if (route.size() > 1) {
-  //   std::pair<int, int> key_first = {route.front().x, route.front().y};
-  //   std::pair<int, int> key_last = {route.back().x, route.back().y};
-  //   size_t index_first, index_last;
-  //   index_first = vertex_map_.at(key_first).index;
-  //   index_last = vertex_map_.at(key_last).index;
-  //   total_cost += distance_[index_first][index_last];
-  // }
   for (const auto &entry : vertex_map_) {
     if (entry.second.status == "N") {
       total_cost += 0.5 * entry.second.best_cost;
@@ -309,26 +302,87 @@ double GreedyLocalSearch::search() {
         dicts.push_back(vertex_map_);
       }
 
+      // 与源代码的更改：避免全量计算
       // 替换操作
-      auto vl_index_it = std::find(route_.begin(), route_.end(), vl);
+      // auto vl_index_it = std::find(route_.begin(), route_.end(), vl);
       //   定位 此处计算与开头的距离 —— 实际索引
+      // size_t vl_index = std::distance(route_.begin(), vl_index_it);
+      // for (size_t i = 0; i < route_.size(); ++i) {
+      //   // 如果当前要交换到的点是它本身 就不用交换
+      //   if (i == vl_index) {
+      //     cost_list.push_back(std::numeric_limits<double>::max());
+      //     routes.push_back(route_);
+      //     dicts.push_back(vertex_map_);
+      //     // 对于当前其他的点都进行交换工作 交换之后计算对应的成本 是否增or减
+      //   } else {
+      //     try {
+      //       std::vector<Point> new_route = route_;
+      //       std::swap(new_route[vl_index], new_route[i]);
+      //       double cost = calculate_route_cost(new_route);
+      //       cost_list.push_back(cost);
+      //       routes.push_back(new_route);
+      //       // 交换操作不需要修改对应的点集
+      //       dicts.push_back(vertex_map_);
+      //     } catch (const std::exception &e) {
+      //       std::cerr << "twoopt operation unknown error: " << e.what()
+      //                 << std::endl;
+      //       // 恢复现场
+      //       cost_list.push_back(std::numeric_limits<double>::max());
+      //       routes.push_back(route_);
+      //       dicts.push_back(vertex_map_);
+      //     }
+      //   }
+      // }
+
+      // 替换操作 (Swap / Two-Opt)
+      // 1. 预先计算当前路外点的总惩罚 (Swap 操作不会改变路外点状态，这是个定值)
+      double current_off_penalty = 0.0;
+      for (const auto &entry : vertex_map_) {
+        if (entry.second.status == "N") {
+          current_off_penalty += 0.5 * entry.second.best_cost;
+        }
+      }
+
+      auto vl_index_it = std::find(route_.begin(), route_.end(), vl);
       size_t vl_index = std::distance(route_.begin(), vl_index_it);
+
       for (size_t i = 0; i < route_.size(); ++i) {
         // 如果当前要交换到的点是它本身 就不用交换
         if (i == vl_index) {
           cost_list.push_back(std::numeric_limits<double>::max());
           routes.push_back(route_);
           dicts.push_back(vertex_map_);
-          // 对于当前其他的点都进行交换工作 交换之后计算对应的成本 是否增or减
         } else {
           try {
+            // 构造新路径
             std::vector<Point> new_route = route_;
             std::swap(new_route[vl_index], new_route[i]);
-            double cost = calculate_route_cost(new_route);
-            cost_list.push_back(cost);
+
+            // 2. 仅计算路径内的几何距离 (Geometry Distance)
+            double route_geo_cost = 0.0;
+            // 遍历新路径计算距离
+            for (size_t k = 0; k < new_route.size() - 1; ++k) {
+              std::pair<int, int> p1_key = {new_route[k].x, new_route[k].y};
+              std::pair<int, int> p2_key = {new_route[k + 1].x,
+                                            new_route[k + 1].y};
+
+              // 获取 distance 矩阵需要的下标索引
+              size_t idx1 = vertex_map_.at(p1_key).index;
+              size_t idx2 = vertex_map_.at(p2_key).index;
+
+              route_geo_cost += distance_[idx1][idx2];
+            }
+
+            // 3. 总花费 = 几何距离 + 路外点惩罚
+            double total_cost = route_geo_cost + current_off_penalty;
+
+            cost_list.push_back(total_cost);
             routes.push_back(new_route);
-            // 交换操作不需要修改对应的点集
+
+            // Swap 操作不改变点的 "Y/N" 状态，直接压入当前的 map 即可
+            // (避免了耗时的 map 拷贝)
             dicts.push_back(vertex_map_);
+
           } catch (const std::exception &e) {
             std::cerr << "twoopt operation unknown error: " << e.what()
                       << std::endl;

@@ -25,7 +25,7 @@ struct Point {
   }
 
   bool operator!=(const Point &other) const {
-    return y != other.y && x != other.x;
+    return !(*this == other);
   }
 };
 

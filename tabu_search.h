@@ -1,3 +1,6 @@
+#ifndef TABU_SEARCH_H
+#define TABU_SEARCH_H
+
 #include "input.h"
 #include <cmath>
 #include <map>
@@ -6,6 +9,27 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+// 定义操作的 Key 类型：单个点(Add/Drop) 或 点对(TwoOpt)
+using OpKey = std::variant<std::vector<Point>,
+                           std::pair<std::vector<Point>, std::vector<Point>>>;
+
+class TabuInfo {
+private:
+  std::vector<OpKey> tabu_list;
+  std::vector<int> tabu_time;
+  int tabu_limit;
+  int current_tabu_size;
+
+public:
+  explicit TabuInfo(int tabu_limit);
+  // 更新禁忌表内容及长度（动态修改数组长度）
+  void update_tabu();
+  void reset_list();
+  void set_limit(int new_limit);
+  bool is_tabu_iter(const OpKey &iter);
+  void add_tabu_iter(const OpKey &iter, int tabu_limit);
+};
 
 class TabuSearch {
 
@@ -18,6 +42,7 @@ public:
       const std::vector<Point> &route, const std::double_t &cost);
 
   void search(int T, int Q, int TBL);
+
   const std::vector<int> &get_len_trend() const { return cost_trend_; }
   const std::vector<Point> &get_iter_solution() const { return iter_solution_; }
   double get_best_cost() const { return best_cost_; }
@@ -40,10 +65,11 @@ private:
 
   // 多样化方法
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
-  diversication(std::vector<std::vector<Point>> solution_set,
+  diversication(const std::vector<std::vector<Point>> &solution_set,
                 std::map<std::pair<int, int>, VertexInfo> iter_dic, int number);
+
   std::tuple<std::vector<Point>, double>
-  path_relinking(std::vector<std::vector<Point>> solution_set,
+  path_relinking(const std::vector<std::vector<Point>> &solution_set,
                  std::map<std::pair<int, int>, VertexInfo> iter_dic);
 
   // TODO 返回值类型优雅设置为类 对应原py代码中
@@ -56,35 +82,11 @@ private:
   //                  "删(5,6)" std::vector<Point>       // 或者你喜欢
   //                  vector<Point>{p1, p2}
   //                  >;
+  // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
              double, std::vector<Point>>
-  operation_style(std::vector<Point> iter_sol,
-                  std::map<std::pair<int, int>, VertexInfo> iter_dic);
+  operation_style(const std::vector<Point> &iter_sol,
+                  const std::map<std::pair<int, int>, VertexInfo> &iter_dic);
 };
 
-class TabuInfo {
-private:
-  std::vector<std::variant<std::vector<Point>,
-                           std::pair<std::vector<Point>, std::vector<Point>>>>
-      tabu_list;
-  std::vector<int> tabu_time;
-  int tabu_limit;
-  int current_tabu_size;
-
-public:
-  // 更新禁忌表内容及长度（动态修改数组长度）
-  void update_tabu();
-  void add_tabu_num();
-  void reset_list();
-  void set_limit(int new_limit);
-  explicit TabuInfo(int tabu_limit);
-  bool
-  is_tabu_iter(std::variant<std::vector<Point>,
-                            std::pair<std::vector<Point>, std::vector<Point>>>
-                   iter);
-  void
-  add_tabu_iter(std::variant<std::vector<Point>,
-                             std::pair<std::vector<Point>, std::vector<Point>>>
-                    iter,
-                int tabu_limit);
-};
+#endif
