@@ -19,5 +19,5 @@ make build
 
 ## 清理
 ```
-make clear
+make clean
 ```
