@@ -75,7 +75,10 @@ class SVRAPConfig:
     GAMMA = 2.0      # 分配成本系数 (C_ij = D_ij * GAMMA)
     LAMBDA_ISOL = 0.5  # **隔离成本权重因子 (λ_isol)**
 
-    # **新增配置：模型保存路径**
+    # 基于概率的贪心选择比例
+    TOP_K_ROUTE_RATIO = 0.2  # 选取 On-route 概率最高的节点作为初始骨干的比例 (20%)
+    
+    # 模型保存路径
     MODEL_PATH = "svrap_best_model.pth"
 
 class SVRAPEnvironment:
@@ -123,7 +126,7 @@ class SVRAPEnvironment:
         总成本 = 路由成本 + 分配成本 + 隔离成本
         Actions: 0=Assign, 1=Route, 2=Loss (对应 v_i=1)
         """
-        actions = actions.cpu().numpy()
+        actions = actions.squeeze().cpu().numpy()
         assign_indices = [i for i, a in enumerate(actions) if a == 0]
         route_indices = [i for i, a in enumerate(actions) if a == 1]
         loss_indices = [i for i, a in enumerate(actions) if a == 2] # 对应 v_i=1
@@ -292,25 +295,56 @@ def run_pipeline(train_model=True):
     
     final_probs_np = final_probs[0].cpu().numpy()
     
+     # 基于贪心策略的初始骨干构建 (Greedy Backbone Selection)
+
+    # 获取 On-route 概率 (动作 1)
+    p_route = final_probs_np[:, 1] 
+    
+    # 1. 节点按 P_Route 降序排序
+    # 返回的是索引
+    sorted_indices = np.argsort(p_route)[::-1]
+    
+    # 2. 确定贪心选择的数量 K (至少2个，确保路径有效)
+    n_nodes = env.n_nodes
+    k = max(2, int(n_nodes * SVRAPConfig.TOP_K_ROUTE_RATIO))
+    
+    # 3. 选取前 K 个节点作为初始骨干
+    greedy_backbone_indices = sorted_indices[:k].tolist()
+    
+    # 4. 评估这个贪心解的成本
+    # 构建贪心动作：ROUTE=1 (骨干节点), ASSIGN=0/LOSS=2 (非骨干节点)
+    # 为了简单起见，我们假设非骨干节点全部是 ASSIGN (0)，只关注骨干的选择。
+    # 实际应用中，还需要一个分配/隔离的启发式方法。
+    # 这里仅评估骨干节点的成本（即如果只考虑路由成本，或者用启发式分配/隔离）
+    
+    # 简化：构建一个只包含 ROUTE (1) 和 ASSIGN (0) 的动作
+    greedy_actions = np.zeros(n_nodes, dtype=int)
+    greedy_actions[greedy_backbone_indices] = 1 # ROUTE
+    
+    # 评估这个贪心解的完整成本 (路由+分配+隔离)
+    greedy_cost = env.evaluate_solution(torch.tensor(greedy_actions)) 
+    
     print("\n" + "="*70)
     print("节点最终概率策略与最优解状态对比")
     print("="*70)
-    print("ID | X,Y 坐标 | P_Assign | P_Route | P_Loss | 最优解状态")
-    print("-" * 70)
+    print("ID | X,Y 坐标 | P_Assign | P_Route | P_Loss | 最优解状态 | 贪心骨干?")
+    print("-" * 80)
     
     status_map = {0: 'ASSIGN', 1: 'ROUTE', 2: 'LOSS'}
     for i in range(env.n_nodes):
-        p_assign, p_route, p_loss = final_probs_np[i]
+        p_assign, p_route_val, p_loss = final_probs_np[i]
         coord = env.coords[i].numpy()
         
-        if best_actions_tensor is not None:
-            action_status = status_map[final_actions[i]]
-        else:
-            action_status = "N/A"
+        action_status = status_map[final_actions[i]] if best_actions_tensor is not None else "N/A" # type: ignore
+        is_greedy_backbone = "✅" if i in greedy_backbone_indices else " "
         
-        print(f"{i:2d} | {coord[0]:.0f},{coord[1]:.0f} | {p_assign:.4f} | {p_route:.4f} | {p_loss:.4f} | {action_status:10s}")
+        print(f"{i:2d} | {coord[0]:.0f},{coord[1]:.0f} | {p_assign:.4f} | {p_route_val:.4f} | {p_loss:.4f} | {action_status:10s} | {is_greedy_backbone:^8s}")
         
-    print("-" * 70)
+    print("-" * 80)
+    print(f"**贪心选择结果 (K={k}, 阈值: P_Route 最高的 {SVRAPConfig.TOP_K_ROUTE_RATIO*100:.0f}%)**")
+    print(f"贪心初始骨干节点 (ROUTE): {greedy_backbone_indices}")
+    print(f"评估贪心解总成本: {greedy_cost:.4f}")
+    print("="*70)
 
 
 if __name__ == "__main__":
