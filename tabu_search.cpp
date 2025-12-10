@@ -672,8 +672,4 @@ void TabuSearch::search(int T, int Q, int TBL) {
       tabu.reset_list(); // 多样化后通常重置禁忌表
     }
   }
-
-  // 结束时确保返回的 solution 是最优解
-  iter_solution_ = iter_solution_;
-  best_cost_ = best_cost_;
 }

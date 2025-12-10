@@ -1,5 +1,6 @@
 #include "greedy.h"
 #include "input.h"
+#include "attention_reader.h"
 #include "tabu_search.h"
 #include <cmath>
 #include <exception>
@@ -86,6 +87,21 @@ int main() {
     std::map<std::pair<int, int>, VertexInfo> vertex_map;
     build_vertex_map(locations, ontour, offtour, distance, vertex_map);
     std::cout << "Build points info done" << std::endl;
+
+    // Copliot
+    // Attempt to read attention probabilities produced by encoder.py
+    std::vector<NodeProb> node_probs;
+    if (read_attention_probs("attention_probs.csv", node_probs)) {
+      std::cout << "Loaded attention probabilities for " << node_probs.size() << " nodes." << std::endl;
+      // Print first 5 entries for verification
+      for (size_t i = 0; i < node_probs.size() && i < 5; ++i) {
+        const auto &np = node_probs[i];
+        std::cout << "Prob[" << i << "] (" << np.p.x << "," << np.p.y << ") = "
+                  << np.p_assign << "," << np.p_route << "," << np.p_loss << std::endl;
+      }
+    } else {
+      std::cout << "No attention_probs.csv found — skipping attention integration." << std::endl;
+    }
 
     // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
     GreedyLocalSearch greedy_searcher =
