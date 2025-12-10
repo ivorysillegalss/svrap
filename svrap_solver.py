@@ -4,13 +4,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import math
-import os # 新增: 用于处理文件路径
+import os 
 
 # ==========================================
 # 1. 配置与环境 (Configuration & Environment)
 # ==========================================
 
 class SVRAPConfig:
+    # 客户坐标数据 (51个客户，对应 n=51)
     RAW_DATA = """
 37,52
 49,49
@@ -71,34 +72,49 @@ class SVRAPConfig:
     LR = 1e-4
     EPOCHS = 1000
     
-    # SVRAP 目标函数参数 (基于您的公式和业务定义)
-    GAMMA = 2.0      # 分配成本系数 (C_ij = D_ij * GAMMA)
-    LAMBDA_ISOL = 0.5  # **隔离成本权重因子 (λ_isol)**
-
-    # 基于概率的贪心选择比例
-    TOP_K_ROUTE_RATIO = 0.2  # 选取 On-route 概率最高的节点作为初始骨干的比例 (20%)
+    # **核心 SVRAP 问题参数 (基于原文)**
+    PARAM_A = 7.0  # 偏向因子 a (影响 c_ij, d_ij 和 lambda_isol)
     
-    # 模型保存路径
+    # 权重因子 (基于原文 - 允许孤立顶点)
+    LAMBDA_TOUR = 1.0  # lambda_tour = 1
+    LAMBDA_ALLOC = 1.0 # lambda_alloc = 1
+    # LAMBDA_ISOL 将在环境初始化时动态计算: 0.5 + 0.0004 * a^2 * n
+
+    # 贪心/模型配置
+    TOP_K_ROUTE_RATIO = 0.2  # 选取 P_Route 最高的 20% 节点作为初始骨干
     MODEL_PATH = "svrap_best_model.pth"
 
 class SVRAPEnvironment:
     def __init__(self, raw_data):
         self.coords, self.norm_coords = self._parse_and_normalize(raw_data)
-        self.n_nodes = len(self.coords)
-        
-        # 根据节点到中心点的距离模拟 D_i (固有隔离成本)
-        center = self.coords.mean(dim=0)
-        dist_to_center = torch.norm(self.coords - center, dim=1)
-        max_dist = dist_to_center.max()
-        if max_dist > 0:
-            norm_dist = dist_to_center / max_dist
-        else:
-            norm_dist = torch.zeros_like(dist_to_center)
-
-        self.node_isolation_cost = 5.0 + 15.0 * norm_dist # (N,)
+        self.n_nodes = len(self.coords) # 包含所有客户节点
+        self.param_a = SVRAPConfig.PARAM_A
         torch.manual_seed(SVRAPConfig.SEED)
         
-        self.dist_matrix, self.cost_matrix = self._compute_matrices()
+        # 1. 计算所有矩阵 (距离, 路由成本, 分配成本)
+        # 这里的距离 l_ij 对应代码中的 dist
+        self.dist_matrix, self.route_cost_matrix, self.alloc_cost_matrix = self._compute_matrices()
+        
+        # 2. 计算隔离成本权重 (lambda_isol)
+        # n 是客户顶点数量，这里 self.n_nodes 就是客户数 N=51
+        # 公式: lambda_isol = 0.5 + 0.0004 * a^2 * n
+        self.lambda_isol = 0.5 + 0.0004 * (self.param_a ** 2) * self.n_nodes
+        
+        # 3. 计算隔离成本 D_i (客户 i 分配给任何其他顶点 j 的最低成本)
+        # D_i = min(d_ij | j != i)
+        
+        # alloc_cost_matrix[0] 是 d_ij = (10 - a) * l_ij
+        temp_alloc_cost = self.alloc_cost_matrix[0].clone() 
+        
+        # 排除对角线 d_ii，即自己分配给自己不计算在内
+        diag_val = torch.inf
+        temp_alloc_cost.fill_diagonal_(diag_val) 
+        
+        # D_i 是每一行（客户 i）到所有其他客户的最小分配成本
+        self.node_isolation_cost, _ = temp_alloc_cost.min(dim=1) 
+        
+        print(f"SVRAP 环境初始化完成: a={self.param_a}, 客户节点 n={self.n_nodes}")
+        print(f"动态计算的 Lambda_isol: {self.lambda_isol:.4f}")
         
     def _parse_and_normalize(self, raw_data):
         coords = []
@@ -116,47 +132,73 @@ class SVRAPEnvironment:
     def _compute_matrices(self):
         x = self.norm_coords
         diff = x.unsqueeze(1) - x.unsqueeze(0)
-        dist = torch.norm(diff, dim=-1)
-        cost = dist * SVRAPConfig.GAMMA
-        return dist.unsqueeze(0), cost.unsqueeze(0)
+        dist = torch.norm(diff, dim=-1) # l_ij (欧氏距离)
+        
+        # 路由成本 c_ij = a * l_ij
+        route_cost = dist * self.param_a 
+        
+        # 分配成本 d_ij = (10 - a) * l_ij
+        alloc_cost = dist * (10.0 - self.param_a)
+        
+        return dist.unsqueeze(0), route_cost.unsqueeze(0), alloc_cost.unsqueeze(0)
 
     def evaluate_solution(self, actions):
         """
         计算目标函数总成本 (最小化):
-        总成本 = 路由成本 + 分配成本 + 隔离成本
-        Actions: 0=Assign, 1=Route, 2=Loss (对应 v_i=1)
+        Total Cost = lambda_tour * Tour + lambda_alloc * Allocation + lambda_isol * Isolation
+        Actions: 0=Assign, 1=Route, 2=Loss
         """
+        # 修正：确保 actions 是一维的 (N,)
         actions = actions.squeeze().cpu().numpy()
+        if actions.ndim == 0:
+             actions = np.array([actions.item()])
+        
         assign_indices = [i for i, a in enumerate(actions) if a == 0]
         route_indices = [i for i, a in enumerate(actions) if a == 1]
-        loss_indices = [i for i, a in enumerate(actions) if a == 2] # 对应 v_i=1
+        loss_indices = [i for i, a in enumerate(actions) if a == 2] 
         backbone_indices = route_indices
         
-        d_mat = self.dist_matrix[0]
-        c_mat = self.cost_matrix[0]
+        route_mat = self.route_cost_matrix[0] # c_ij
+        alloc_mat = self.alloc_cost_matrix[0] # d_ij
         
-        # 1. 路由成本 (Route Cost)
+        # --- 1. 路由成本 (Tour Cost) ---
+        # lambda_tour * sum(c_ij * x_ij)
+        route_cost_sum = 0
         if len(backbone_indices) < 2:
-            route_cost = 1000.0 
+            route_cost_sum = 1000.0 # 惩罚无效路径
         else:
-            route_cost = 0
             for k in range(len(backbone_indices)):
                 u, v = backbone_indices[k], backbone_indices[(k + 1) % len(backbone_indices)]
-                route_cost += d_mat[u, v].item()
+                # route_mat[u, v] 已经是 c_ij = a * l_ij
+                route_cost_sum += route_mat[u, v].item()
+        
+        tour_cost = SVRAPConfig.LAMBDA_TOUR * route_cost_sum
             
-        # 2. 分配成本 (Assignment Cost)
-        assign_cost = 0
+        # --- 2. 分配成本 (Allocation Cost) ---
+        # lambda_alloc * sum(d_ij * y_ij)
+        assign_cost_sum = 0
         if len(backbone_indices) > 0:
             for nb_idx in assign_indices:
-                min_c_to_backbone = min([c_mat[nb_idx, b].item() for b in backbone_indices])
-                assign_cost += min_c_to_backbone
-        
-        # 3. 隔离成本 (Isolation Cost)
-        isolation_cost_sum = sum(self.node_isolation_cost[i].item() for i in loss_indices)
-        isolation_cost = SVRAPConfig.LAMBDA_ISOL * isolation_cost_sum
+                # 寻找最小分配成本 d_ij。alloc_mat[nb_idx, b] 已经是 d_ij = (10-a)*l_ij
+                min_d_to_backbone = min([alloc_mat[nb_idx, b].item() for b in backbone_indices])
+                assign_cost_sum += min_d_to_backbone
 
-        total_cost = route_cost + assign_cost + isolation_cost
+        allocation_cost = SVRAPConfig.LAMBDA_ALLOC * assign_cost_sum
         
+        # --- 3. 隔离成本 (Isolation Cost) ---
+        # lambda_isol * sum(D_i * v_i)
+        isolation_cost_sum = 0
+        for i in loss_indices:
+             # D_i 是预先计算的最低分配成本 min(d_ij)
+            isolation_cost_sum += self.node_isolation_cost[i].item()
+            
+        # lambda_isol 是动态计算的 self.lambda_isol
+        isolation_cost = self.lambda_isol * isolation_cost_sum
+
+        # 最终总成本
+        total_cost = tour_cost + allocation_cost + isolation_cost
+        
+        # 额外惩罚：如果存在 ASSIGN 节点但没有 ROUTE 骨干
         if len(assign_indices) > 0 and len(backbone_indices) == 0:
              total_cost += 1000.0
             
@@ -190,6 +232,7 @@ class SVRAPNetwork(nn.Module):
         self.head = nn.Linear(dim, 3) 
 
     def forward(self, x, d, c):
+        # 路由成本矩阵 d 和 分配成本矩阵 c 用于指导注意力
         h = self.node_emb(x)
         attn_bias = self.edge_fusion(d, c)
         h_key_bias = h + attn_bias.mean(dim=-1).unsqueeze(-1) 
@@ -212,8 +255,9 @@ def run_pipeline(train_model=True):
     model = SVRAPNetwork(env.n_nodes)
     
     x = env.norm_coords.unsqueeze(0)
-    d = env.dist_matrix
-    c = env.cost_matrix
+    # 将路由成本矩阵和分配成本矩阵作为特征输入
+    route_cost_tensor = env.route_cost_matrix 
+    alloc_cost_tensor = env.alloc_cost_matrix
     
     # --- 加载/训练逻辑 ---
     best_cost = float('inf')
@@ -236,19 +280,19 @@ def run_pipeline(train_model=True):
         model.train()
         for epoch in range(SVRAPConfig.EPOCHS):
             optimizer.zero_grad()
-            logits = model(x, d, c)
+            # 使用路由和分配成本作为注意力输入特征
+            logits = model(x, route_cost_tensor, alloc_cost_tensor)
             probs = F.softmax(logits, dim=-1)
             dist = torch.distributions.Categorical(probs)
             actions = dist.sample()
             
-            cost = env.evaluate_solution(actions[0])
+            cost = env.evaluate_solution(actions) # actions 已经是 (B, N)
             
             if cost < best_cost:
                 best_cost = cost
-                # 保存最优状态
                 best_actions_tensor = actions.clone().detach() 
                 
-                # **新增: 实时保存最佳模型**
+                # 实时保存最佳模型
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'best_cost': best_cost,
@@ -267,21 +311,22 @@ def run_pipeline(train_model=True):
             optimizer.step()
             
             if epoch % 100 == 0:
-                route_count = (actions == 1).sum().item()
-                loss_count = (actions == 2).sum().item()
+                actions_np = actions.squeeze().cpu().numpy()
+                route_count = (actions_np == 1).sum().item()
+                loss_count = (actions_np == 2).sum().item()
                 print(f"Epoch {epoch:04d} | Cost: {cost:.4f} | Best: {best_cost:.4f} | R/L Count: {route_count}/{loss_count}")
         
         print(f"\n🎉 训练完成。最优模型已保存到 {SVRAPConfig.MODEL_PATH}")
 
-    # 4. 最终结果展示
+    # 4. 最终结果展示和贪心选择
     print("\n" + "="*70)
     print("最终结果展示 (Final Results)")
     print("="*70)
     print(f"最优总成本 (Best Cost): {best_cost:.4f}")
 
-    # 确保使用保存的最优动作进行评估展示
+    final_actions = best_actions_tensor.squeeze().cpu().tolist() if best_actions_tensor is not None else []
+    
     if best_actions_tensor is not None:
-        final_actions = best_actions_tensor.squeeze().cpu().tolist()
         final_route = [i for i, a in enumerate(final_actions) if a == 1]
         final_loss = [i for i, a in enumerate(final_actions) if a == 2]
         
@@ -290,39 +335,26 @@ def run_pipeline(train_model=True):
     
     model.eval()
     with torch.no_grad():
-        final_logits = model(x, d, c)
+        final_logits = model(x, route_cost_tensor, alloc_cost_tensor)
         final_probs = F.softmax(final_logits, dim=-1)
     
     final_probs_np = final_probs[0].cpu().numpy()
     
-     # 基于贪心策略的初始骨干构建 (Greedy Backbone Selection)
-
-    # 获取 On-route 概率 (动作 1)
-    p_route = final_probs_np[:, 1] 
+    # --- 基于贪心策略的初始骨干构建 (Greedy Backbone Selection) ---
     
-    # 1. 节点按 P_Route 降序排序
-    # 返回的是索引
-    sorted_indices = np.argsort(p_route)[::-1]
+    p_route = final_probs_np[:, 1] # 获取 On-route 概率 (动作 1)
+    sorted_indices = np.argsort(p_route)[::-1] # 节点按 P_Route 降序排序
     
-    # 2. 确定贪心选择的数量 K (至少2个，确保路径有效)
     n_nodes = env.n_nodes
-    k = max(2, int(n_nodes * SVRAPConfig.TOP_K_ROUTE_RATIO))
+    k = max(2, int(n_nodes * SVRAPConfig.TOP_K_ROUTE_RATIO)) # 确定贪心选择的数量 K
+    greedy_backbone_indices = sorted_indices[:k].tolist() # 选取前 K 个节点作为初始骨干
     
-    # 3. 选取前 K 个节点作为初始骨干
-    greedy_backbone_indices = sorted_indices[:k].tolist()
-    
-    # 4. 评估这个贪心解的成本
-    # 构建贪心动作：ROUTE=1 (骨干节点), ASSIGN=0/LOSS=2 (非骨干节点)
-    # 为了简单起见，我们假设非骨干节点全部是 ASSIGN (0)，只关注骨干的选择。
-    # 实际应用中，还需要一个分配/隔离的启发式方法。
-    # 这里仅评估骨干节点的成本（即如果只考虑路由成本，或者用启发式分配/隔离）
-    
-    # 简化：构建一个只包含 ROUTE (1) 和 ASSIGN (0) 的动作
+    # 评估这个贪心解的完整成本 (ROUTE=1, ASSIGN=0)
     greedy_actions = np.zeros(n_nodes, dtype=int)
     greedy_actions[greedy_backbone_indices] = 1 # ROUTE
-    
-    # 评估这个贪心解的完整成本 (路由+分配+隔离)
-    greedy_cost = env.evaluate_solution(torch.tensor(greedy_actions)) 
+    greedy_cost = env.evaluate_solution(torch.tensor(greedy_actions).unsqueeze(0)) 
+
+    # -----------------------------------------------------------------
     
     print("\n" + "="*70)
     print("节点最终概率策略与最优解状态对比")
@@ -335,7 +367,7 @@ def run_pipeline(train_model=True):
         p_assign, p_route_val, p_loss = final_probs_np[i]
         coord = env.coords[i].numpy()
         
-        action_status = status_map[final_actions[i]] if best_actions_tensor is not None else "N/A" # type: ignore
+        action_status = status_map[final_actions[i]] if best_actions_tensor is not None else "N/A"
         is_greedy_backbone = "✅" if i in greedy_backbone_indices else " "
         
         print(f"{i:2d} | {coord[0]:.0f},{coord[1]:.0f} | {p_assign:.4f} | {p_route_val:.4f} | {p_loss:.4f} | {action_status:10s} | {is_greedy_backbone:^8s}")
@@ -348,12 +380,6 @@ def run_pipeline(train_model=True):
 
 
 if __name__ == "__main__":
-    # 第一次运行：进行训练并保存模型
-    # run_pipeline(train_model=True) 
-    
-    # 第二次运行：直接加载已保存的模型，跳过训练
-    # run_pipeline(train_model=False) 
-    
     # 默认行为：如果文件存在则加载，否则训练
     if os.path.exists(SVRAPConfig.MODEL_PATH):
         run_pipeline(train_model=False)
