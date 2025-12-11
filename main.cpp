@@ -5,10 +5,18 @@
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <utility>
 #include <vector>
+#include <io.h>
+#include <fcntl.h>
+
+// 设置 Windows 控制台 UTF-8 编码以正确显示中文
+#ifdef _WIN32
+  #include <windows.h>
+#endif
 
 #define PATH_RELINKING_TIMES 50
 #define DIVERSIFICATION 3
@@ -18,21 +26,36 @@ GreedyLocalSearch
 greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
                     std::vector<std::vector<double>> distance,
                     std::map<std::pair<int, int>, VertexInfo> vertex_map,
-                    std::vector<Point> locations) {
+                    std::vector<Point> locations,
+                    const std::vector<Point> &initial_route_override = {}) {
   // 对于每个 off_vertice 中的点，计算它到所有
   // on_vertice中点的距离（使用之前的 distance 矩阵）。
   // 找到距离最小的点（best_vertice）和对应的最小距离（best_cost）。
   calculate_nearest_cost(ontour, offtour, distance, vertex_map);
 
   // 进行第一次运算 得到进行后续 贪婪搜索的初始解
-  // 后续使用贪婪局部搜索进行优化
-  std::vector<Point> initial_route =
-      nearest_neighbour(ontour, distance, vertex_map);
-  std::cout << "初始路径：" << std::endl;
+  // 如果外部传入了 initial_route_override，则使用之（backbone 初始化）
+  // 但需要确保它包含所有 ontour 中的点，否则补充完整
+  std::vector<Point> initial_route;
+  if (!initial_route_override.empty()) {
+    // 使用 backbone 作为初始路线的一部分，但要确保包含所有 ontour 点
+    initial_route = initial_route_override;
+    // 添加不在 backbone 中但在 ontour 中的点
+    for (const auto &on_pt : ontour) {
+      if (std::find(initial_route.begin(), initial_route.end(), on_pt) == initial_route.end()) {
+        initial_route.push_back(on_pt);
+      }
+    }
+  } else {
+    // 默认使用最近邻构造初始路径
+    initial_route = nearest_neighbour(ontour, distance, vertex_map);
+  }
+
+  std::cout << "Initial route:" << std::endl;
   for (const auto &p : initial_route) {
     std::cout << "(" << p.x << ", " << p.y << ")" << std::endl;
   }
-  std::cout << "初始路径长度：" << initial_route.size() << std::endl;
+  std::cout << "Route size: " << initial_route.size() << std::endl;
 
   // 带入贪婪局部搜索第一步时的初始解
   GreedyLocalSearch solver(locations, distance, ontour, offtour, vertex_map,
@@ -55,8 +78,21 @@ tabu_search(const std::vector<Point> &locations,
 
 int main() {
   try {
+    // 设置 Windows 控制台 UTF-8 输出
+    #ifdef _WIN32
+      // 尝试设置控制台代码页，忽略失败
+      HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+      if (hOut != INVALID_HANDLE_VALUE) {
+        DWORD dwMode = 0;
+        if (GetConsoleMode(hOut, &dwMode)) {
+          SetConsoleOutputCP(CP_UTF8);
+          _setmode(_fileno(stdout), _O_U8TEXT);
+        }
+      }
+    #endif
+
     // 加载读取坐标集
-    std::string filename = "tsp数据坐标集.txt";
+    std::string filename = "dataset.txt";
     std::vector<Point> locations;
     read_coordinates(filename, locations);
     std::cout << "Read" << locations.size() << " points." << std::endl;
@@ -71,8 +107,7 @@ int main() {
     classify_points(locations, ontour, offtour, A_VALUE, B_VALUE,
                     BOUNDARY_VALUE);
 
-    std::cout << "Points in ontour size: " << ontour.size() << std::endl;
-    std::cout << "Points in offtour size: " << offtour.size() << std::endl;
+    std::cout << "On-tour: " << ontour.size() << " | Off-tour: " << offtour.size() << std::endl;
 
     // std::cout << "Ontour points:\n";
     // for (const auto &p : ontour) {
@@ -86,27 +121,73 @@ int main() {
     // 构建点信息集
     std::map<std::pair<int, int>, VertexInfo> vertex_map;
     build_vertex_map(locations, ontour, offtour, distance, vertex_map);
-    std::cout << "Build points info done" << std::endl;
+    std::cout << "Vertex map built." << std::endl;
 
-    // Copliot
-    // Attempt to read attention probabilities produced by encoder.py
+    // Copilot: Attempt to read attention probabilities produced by Python solver
     std::vector<NodeProb> node_probs;
+    std::vector<Point> backbone_initial_route;
     if (read_attention_probs("attention_probs.csv", node_probs)) {
       std::cout << "Loaded attention probabilities for " << node_probs.size() << " nodes." << std::endl;
-      // Print first 5 entries for verification
-      for (size_t i = 0; i < node_probs.size() && i < 5; ++i) {
-        const auto &np = node_probs[i];
-        std::cout << "Prob[" << i << "] (" << np.p.x << "," << np.p.y << ") = "
-                  << np.p_assign << "," << np.p_route << "," << np.p_loss << std::endl;
+      // Build initial backbone route by taking top-K p_route
+      // K = max(2, int(n * 0.2)) — we use the same heuristic as Python
+      size_t n = locations.size();
+      size_t k = std::max<size_t>(2, static_cast<size_t>(std::floor(n * 0.2)));
+
+      // Ensure we have one prob entry per location (by coordinates). If not, skip.
+      if (node_probs.size() == n) {
+        // create index vector
+        std::vector<size_t> idx(node_probs.size());
+        for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+        // sort indices by p_route desc
+        std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
+          return node_probs[a].p_route > node_probs[b].p_route;
+        });
+        // pick top k and push corresponding Points
+        for (size_t i = 0; i < k && i < idx.size(); ++i) {
+          backbone_initial_route.push_back(node_probs[idx[i]].p);
+        }
+
+        std::cout << "Backbone initial route from attention (K=" << k << "): ";
+        for (const auto &p : backbone_initial_route) std::cout << "(" << p.x << "," << p.y << ") ";
+        std::cout << std::endl;
+      } else {
+        std::cout << "attention_probs.csv length mismatch: expected " << locations.size() << ", got " << node_probs.size() << ". Skipping backbone init." << std::endl;
       }
     } else {
       std::cout << "No attention_probs.csv found — skipping attention integration." << std::endl;
     }
 
+    // 如果 backbone_initial_route 非空，则确保 ontour/offtour/vertex_map 与初始解一致
+    std::vector<Point> backbone_filtered;
+    if (!backbone_initial_route.empty()) {
+      // Filter backbone points: only keep those that exist in locations
+      // AND convert them to the actual Point objects from locations (not from CSV)
+      for (const auto &bp : backbone_initial_route) {
+        auto it_loc = std::find(locations.begin(), locations.end(), bp);
+        if (it_loc != locations.end()) {
+          // Use the Point object from locations, not from CSV
+          backbone_filtered.push_back(*it_loc);
+          // move backbone point into ontour (if it's in offtour)
+          auto it_off = std::find(offtour.begin(), offtour.end(), *it_loc);
+          if (it_off != offtour.end()) {
+            offtour.erase(it_off);
+            ontour.push_back(*it_loc);
+          }
+          // if already in ontour, that's fine
+        } else {
+          std::cout << "Warning: backbone point (" << bp.x << "," << bp.y 
+                    << ") not found in locations, skipping" << std::endl;
+        }
+      }
+      // rebuild vertex_map to reflect updated ontour/offtour
+      build_vertex_map(locations, ontour, offtour, distance, vertex_map);
+      std::cout << "Filtered backbone route: " << backbone_filtered.size() << " points" << std::endl;
+    }
+
     // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
     GreedyLocalSearch greedy_searcher =
-        greedy_local_search(ontour, offtour, distance, vertex_map, locations);
-    std::cout << "Greedy search done" << std::endl;
+        greedy_local_search(ontour, offtour, distance, vertex_map, locations, backbone_filtered);
+    std::cout << "Greedy search completed." << std::endl;
 
     // TODO 创建搜索上下文结构体 searchctx
 
@@ -124,7 +205,7 @@ int main() {
     auto len_trend = tabu_seracher.get_len_trend();
     auto iter_solution = tabu_seracher.get_iter_solution();
     double best_cost = tabu_seracher.get_best_cost();
-    std::cout << "最优解值为" << best_cost << "\n";
+    std::cout << "Best cost: " << best_cost << std::endl;
 
     // TODO 后续输出启发式最优路线耗时等逻辑
   } catch (const std::exception &e) {

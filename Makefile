@@ -1,3 +1,18 @@
+# 选择当前的操作系统
+ifeq ($(OS),Windows_NT)
+    RM         := del /Q 2>nul
+    EXE_SUFFIX := .exe
+    TARGET     := app$(EXE_SUFFIX)
+    RUN_CMD    := $(TARGET)
+    DATE_CMD   := powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"
+else
+    RM         := rm -f
+    EXE_SUFFIX :=
+    TARGET     := app
+    RUN_CMD    := ./$(TARGET)
+    DATE_CMD   := date '+%Y-%m-%d %H:%M:%S'
+endif
+
 # Makefile
 CXX      := g++
 # 执行用
@@ -16,24 +31,32 @@ SOURCES  := $(wildcard *.cpp)
 all: clean $(TARGET)
 	@echo "=== Build OK, running $(TARGET) ==="
 	@echo "========================================" >> $(RUN_LOG)
-	@echo "[$(shell date '+%Y-%m-%d %H:%M:%S')] START RUN" >> $(RUN_LOG)
+	@echo "[$$($(DATE_CMD))] START RUN" >> $(RUN_LOG)
 	@echo "----------------------------------------" >> $(RUN_LOG)
-	@./$(TARGET) >> $(RUN_LOG) 2>&1 || (echo "Program crashed or exited with error! See $(RUN_LOG)" && tail -30 $(RUN_LOG); exit 1)
+	@$(RUN_CMD) >> $(RUN_LOG) 2>&1 || ( \
+		echo "Program crashed or exited with error! See $(RUN_LOG)" && \
+		$(call TAIL,30,$(RUN_LOG)); \
+		exit 1 \
+	)
 	@echo "=== Run finished (see $(RUN_LOG)) ==="
 
 # 编译（错误追加到 build.log）
 $(TARGET): $(SOURCES)
 	@echo "Building $(TARGET) ..."
-	@$(CXX) $(CXXFLAGS) *.cpp -o $@ 2>> $(BUILD_LOG) && echo "Build successful" || (echo "Build FAILED! See $(BUILD_LOG)"; tail -20 $(BUILD_LOG); exit 1)
+	@$(CXX) $(CXXFLAGS) $(SOURCES) -o $@ 2>> $(BUILD_LOG) && echo "Build successful" || ( \
+		echo "Build FAILED! See $(BUILD_LOG)" && \
+		$(call TAIL,20,$(BUILD_LOG)); \
+		exit 1 \
+	)
 
 clean:
-	@rm -f $(TARGET) *.o
+	@$(RM) $(TARGET) *.o
 	@echo "Clean done"
 
 # 只看运行日志
 log:
-	@tail -50 $(RUN_LOG)
+	@$(call TAIL,50,$(RUN_LOG))
 
 # 只看编译错误日志
 blog:
-	@tail -50 $(BUILD_LOG)
+	@$(call TAIL,50,$(BUILD_LOG))

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +6,7 @@ import torch.optim as optim
 import numpy as np
 import math
 import os 
+import csv
 
 # ==========================================
 # 1. 配置与环境 (Configuration & Environment)
@@ -265,7 +267,7 @@ def run_pipeline(train_model=True):
     
     if os.path.exists(SVRAPConfig.MODEL_PATH) and not train_model:
         # **加载已保存的模型**
-        print(f"✅ 发现已保存模型: {SVRAPConfig.MODEL_PATH}。跳过训练，直接加载...")
+        print(f"[Found] 发现已保存模型: {SVRAPConfig.MODEL_PATH}。跳过训练，直接加载...")
         checkpoint = torch.load(SVRAPConfig.MODEL_PATH)
         model.load_state_dict(checkpoint['model_state_dict'])
         best_cost = checkpoint['best_cost']
@@ -368,7 +370,7 @@ def run_pipeline(train_model=True):
         coord = env.coords[i].numpy()
         
         action_status = status_map[final_actions[i]] if best_actions_tensor is not None else "N/A"
-        is_greedy_backbone = "✅" if i in greedy_backbone_indices else " "
+        is_greedy_backbone = "YES" if i in greedy_backbone_indices else "   "
         
         print(f"{i:2d} | {coord[0]:.0f},{coord[1]:.0f} | {p_assign:.4f} | {p_route_val:.4f} | {p_loss:.4f} | {action_status:10s} | {is_greedy_backbone:^8s}")
         
@@ -377,6 +379,31 @@ def run_pipeline(train_model=True):
     print(f"贪心初始骨干节点 (ROUTE): {greedy_backbone_indices}")
     print(f"评估贪心解总成本: {greedy_cost:.4f}")
     print("="*70)
+
+    # --------------------
+    # 保存注意力/状态概率到 CSV，供 C++ 读取
+    # CSV 格式: x,y,p_assign,p_route,p_loss
+    # --------------------
+    csv_filename = "attention_probs.csv"
+    try:
+        with open(csv_filename, "w", newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["x", "y", "p_assign", "p_route", "p_loss"]) 
+            for i in range(env.n_nodes):
+                xcoord, ycoord = int(env.coords[i][0].item()), int(env.coords[i][1].item())
+                p_assign, p_route_val, p_loss = final_probs_np[i]
+                writer.writerow([xcoord, ycoord, f"{p_assign:.6f}", f"{p_route_val:.6f}", f"{p_loss:.6f}"])
+        print(f"Saved node state probabilities to {csv_filename}")
+    except Exception as e:
+        print(f"Warning: failed to write {csv_filename}: {e}")
+
+    # 保存贪心骨干节点索引（可选，便于调试）
+    try:
+        with open("backbone_indices.txt", "w") as f:
+            f.write("\n".join([str(i) for i in greedy_backbone_indices]))
+        print("Saved backbone indices to backbone_indices.txt")
+    except Exception as e:
+        print(f"Warning: failed to write backbone_indices.txt: {e}")
 
 
 if __name__ == "__main__":

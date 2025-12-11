@@ -361,16 +361,26 @@ double GreedyLocalSearch::search() {
             // 2. 仅计算路径内的几何距离 (Geometry Distance)
             double route_geo_cost = 0.0;
             // 遍历新路径计算距离
+            bool point_not_found = false;
             for (size_t k = 0; k < new_route.size() - 1; ++k) {
               std::pair<int, int> p1_key = {new_route[k].x, new_route[k].y};
               std::pair<int, int> p2_key = {new_route[k + 1].x,
                                             new_route[k + 1].y};
 
               // 获取 distance 矩阵需要的下标索引
+              if (vertex_map_.find(p1_key) == vertex_map_.end() ||
+                  vertex_map_.find(p2_key) == vertex_map_.end()) {
+                point_not_found = true;
+                break;
+              }
               size_t idx1 = vertex_map_.at(p1_key).index;
               size_t idx2 = vertex_map_.at(p2_key).index;
 
               route_geo_cost += distance_[idx1][idx2];
+            }
+            
+            if (point_not_found) {
+              throw std::runtime_error("Point not found in vertex_map during twoopt");
             }
 
             // 3. 总花费 = 几何距离 + 路外点惩罚

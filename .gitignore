@@ -1,47 +1,93 @@
+# IDE and Editor
 .vscode/
+.idea/
 *.suo
 *.user
 *.userosscache
 *.sln
+*.vs/
+.vs/
 
-# Ignore build artifacts
+# Build artifacts
 build/
 bin/
 obj/
+dist/
+*.exe
+*.app
+*.dll
 
-# Ignore temporary files
+# Compiled object and library files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.out
+
+# CMake and Make
+CMakeLists.txt.user
+Makefile.user
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+*.cmake
+
+# Clangd and LSP
+.cache/
+.clangd/
+
+# Temporary and log files
 *.log
 *.tmp
 *.swp
 *.bak
+*.swo
+*~
+.DS_Store
+Thumbs.db
 
-# Ignore compiled object files and executables
-*.o
-*.a
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
-*.out
-*.exe
+dist/
+build/
+*.egg-info/
+.Python
+env/
+venv/
+.env
+*.egg
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Ignore CMake/Make build files
-CMakeLists.txt.user
-Makefile.user
+# Conda environments
+conda-env.yml
 
-# Ignore clangd index
-.cache/clangd/
+# Generated runtime files
+*.csv
+*.txt
+!dataset.txt
+!requirements.txt
+!README.md
 
-# Ignore all text files that are specific to data
-tsp数据坐标集.txt
+# PyTorch model weights (if large, version control optional)
+*.pth
 
-# Ignore dependency directories
+# Node modules (if used)
 node_modules/
 npm-debug.log
 yarn-error.log
 
-# Ignore MacOS specific files
+# OS specific
 .DS_Store
-
-# Ignore Windows specific files
+.AppleDouble
+.LSOverride
 Thumbs.db
-
-# Build
-app
+desktop.ini
