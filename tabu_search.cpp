@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <iostream>
 #include <iterator>
 #include <random>
 #include <tuple>
@@ -90,8 +91,69 @@ TabuSearch::TabuSearch(
     const std::vector<Point> &route, const std::double_t &cost)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route),
-      solution_cost_(cost), iter_solution_(route), best_cost_(cost) {
+      solution_cost_(cost), iter_solution_(route), best_cost_(cost),
+      entropy_threshold_(0.0), use_entropy_filter_(false) {
   cost_trend_.push_back(cost);
+}
+
+// Set entropy information for the tabu search
+void TabuSearch::set_entropy_info(
+    const std::set<std::pair<int, int>> &high_entropy_nodes,
+    double entropy_threshold) {
+  high_entropy_nodes_ = high_entropy_nodes;
+  entropy_threshold_ = entropy_threshold;
+  use_entropy_filter_ = !high_entropy_nodes.empty();
+  
+  if (use_entropy_filter_) {
+    std::cout << "Entropy filter enabled: " << high_entropy_nodes_.size() 
+              << " high-entropy nodes (threshold=" << entropy_threshold_ << ")" << std::endl;
+  }
+}
+
+// Check if a node should be searched (based on entropy)
+// 高熵节点需要搜索，低熵节点（策略网络确定性高）可以跳过
+bool TabuSearch::should_search_node(const Point &p) const {
+  if (!use_entropy_filter_) {
+    return true; // 未启用熵过滤，所有节点都搜索
+  }
+  
+  // 检查节点是否在高熵集合中
+  return high_entropy_nodes_.count({p.x, p.y}) > 0;
+}
+
+// 计算一个邻域操作的“高熵得分”：
+// 这里简单使用：操作涉及点中属于高熵集合的比例 ∈ [0,1]
+double TabuSearch::compute_operation_entropy_score(const OpKey &key) const {
+  if (!use_entropy_filter_) {
+    return 0.0;
+  }
+
+  std::vector<Point> operated_points;
+  if (std::holds_alternative<std::vector<Point>>(key)) {
+    const auto &v = std::get<std::vector<Point>>(key);
+    operated_points.insert(operated_points.end(), v.begin(), v.end());
+  } else {
+    const auto &pr =
+        std::get<std::pair<std::vector<Point>, std::vector<Point>>>(key);
+    operated_points.insert(operated_points.end(), pr.first.begin(),
+                           pr.first.end());
+    operated_points.insert(operated_points.end(), pr.second.begin(),
+                           pr.second.end());
+  }
+
+  if (operated_points.empty()) {
+    return 0.0;
+  }
+
+  int high_cnt = 0;
+  for (const auto &p : operated_points) {
+    if (high_entropy_nodes_.count({p.x, p.y}) > 0) {
+      ++high_cnt;
+    }
+  }
+
+  return static_cast<double>(high_cnt) /
+         static_cast<double>(operated_points.size());
 }
 
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
@@ -112,14 +174,21 @@ TabuSearch ::operation_style(
   if (style_number == ADD) {
     auto add_dic = iter_dic;
     Point add_vertice;
-    bool found = false;
 
     // 安全地寻找一个不在路径上的点 (status == "N")
     // 为了防止死循环（如果所有点都在路径上），先收集所有 "N" 的点
     std::vector<Point> candidates;
+    std::vector<Point> high_entropy_candidates;
     for (const auto &kv : iter_dic) {
       if (kv.second.status == "N") {
-        candidates.push_back({kv.first.first, kv.first.second});
+        Point p{kv.first.first, kv.first.second};
+        candidates.push_back(p);
+
+        // 如果启用了熵过滤，并且该点在高熵集合中，则单独记录
+        if (use_entropy_filter_ &&
+            high_entropy_nodes_.count({p.x, p.y}) > 0) {
+          high_entropy_candidates.push_back(p);
+        }
       }
     }
 
@@ -128,9 +197,14 @@ TabuSearch ::operation_style(
       return {route, iter_dic, std::numeric_limits<double>::max(), {}};
     }
 
-    // 随机选一个
-    add_vertice = candidates[std::uniform_int_distribution<int>(
-        0, candidates.size() - 1)(rng)];
+    // 随机选一个：如果有高熵候选，则优先在高熵集合中选；否则退回到所有候选
+    const std::vector<Point> *pool = &candidates;
+    if (use_entropy_filter_ && !high_entropy_candidates.empty()) {
+      pool = &high_entropy_candidates;
+    }
+
+    add_vertice = (*pool)[std::uniform_int_distribution<int>(
+        0, static_cast<int>(pool->size()) - 1)(rng)];
 
     // 更新 Map 状态
     add_dic[{add_vertice.x, add_vertice.y}].status = "Y";
@@ -541,6 +615,18 @@ void TabuSearch::search(int T, int Q, int TBL) {
   while (iter_count < MAX_TOTAL_ITER) {
     iter_count++;
 
+    // 迭代相关的熵权重（简单线性退火）：
+    // 前期熵权重较大，后期逐步衰减为 0
+    double entropy_weight = 0.0;
+    if (use_entropy_filter_) {
+      const double lambda0 = 1.0; // 初始熵权重，可按需要调参
+      double progress = static_cast<double>(iter_count) /
+                        static_cast<double>(MAX_TOTAL_ITER);
+      if (progress > 1.0)
+        progress = 1.0;
+      entropy_weight = lambda0 * (1.0 - progress);
+    }
+
     // 1. 生成邻域 (Candidate List)
     using Candidate =
         std::tuple<double, std::vector<Point>,
@@ -583,32 +669,40 @@ void TabuSearch::search(int T, int Q, int TBL) {
     if (candidates.empty())
       break;
 
-    // 2. 选择最优邻域 (Best Fit)
-    std::sort(candidates.begin(), candidates.end(),
-              [](const auto &a, const auto &b) {
-                return std::get<0>(a) < std::get<0>(b);
-              });
+    // 2. 选择最优邻域 (Best Fit) —— 引入熵加权评分
+    // 评分: adjusted_cost = cost - entropy_weight * entropy_score
+    // 其中 entropy_score 为操作中高熵点比例 ∈ [0,1]
 
     bool found_move = false;
-    double best_candidate_cost = 0;
+    double best_candidate_cost = 0.0;
+    double best_adjusted_cost = std::numeric_limits<double>::infinity();
     OpKey move_key;
+    std::vector<Point> best_route_candidate;
+    std::map<std::pair<int, int>, VertexInfo> best_dic_candidate;
 
     for (const auto &cand : candidates) {
       double c_cost = std::get<0>(cand);
+      const auto &c_route = std::get<1>(cand);
+      const auto &c_dic = std::get<2>(cand);
       const auto &c_key = std::get<3>(cand);
 
       bool is_tabu = tabu.is_tabu_iter(c_key);
 
-      // Aspiration Criteria (渴望准则): 禁忌但更优 -> 破禁
-      // OR 移动非禁忌
-      if (!is_tabu || c_cost < best_cost_) {
-        // 接受此移动
-        current_sol = std::get<1>(cand);
-        current_dic = std::get<2>(cand);
+      // 只考虑满足禁忌规则或破禁欲望准则的候选
+      if (is_tabu && !(c_cost < best_cost_)) {
+        continue;
+      }
+
+      double entropy_score = compute_operation_entropy_score(c_key);
+      double adjusted_cost = c_cost - entropy_weight * entropy_score;
+
+      if (adjusted_cost < best_adjusted_cost) {
+        best_adjusted_cost = adjusted_cost;
         best_candidate_cost = c_cost;
         move_key = c_key;
+        best_route_candidate = c_route;
+        best_dic_candidate = c_dic;
         found_move = true;
-        break;
       }
     }
 
@@ -620,6 +714,10 @@ void TabuSearch::search(int T, int Q, int TBL) {
       // 执行移动并更新禁忌表
       tabu.add_tabu_iter(move_key, TBL);
       tabu.update_tabu();
+
+      // 应用选择的邻域解
+      current_sol = best_route_candidate;
+      current_dic = best_dic_candidate;
 
       // 3. 更新全局最优
       if (best_candidate_cost < best_cost_) {

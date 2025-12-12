@@ -5,8 +5,10 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import math
-import os 
+import os
 import csv
+import time
+from typing import Optional
 
 # ==========================================
 # 1. 配置与环境 (Configuration & Environment)
@@ -72,23 +74,52 @@ class SVRAPConfig:
     EMBED_DIM = 128
     N_HEADS = 4
     LR = 1e-4
-    EPOCHS = 1000
+    # 训练轮数与 Early Stopping 策略
+    EPOCHS = 300              # 最大训练轮数上限
+    MIN_EPOCHS = 80           # 至少训练这么多轮再考虑提前停止
+    EARLY_STOP_PATIENCE = 80  # 连续若干轮 best_cost 无提升则提前停止
     
     # **核心 SVRAP 问题参数 (基于原文)**
     PARAM_A = 7.0  # 偏向因子 a (影响 c_ij, d_ij 和 lambda_isol)
     
     # 权重因子 (基于原文 - 允许孤立顶点)
-    LAMBDA_TOUR = 1.0  # lambda_tour = 1
-    LAMBDA_ALLOC = 1.0 # lambda_alloc = 1
+    LAMBDA_TOUR = 1.0   # lambda_tour = 1
+    LAMBDA_ALLOC = 1.0  # lambda_alloc = 1
     # LAMBDA_ISOL 将在环境初始化时动态计算: 0.5 + 0.0004 * a^2 * n
+    # 如需手动覆盖，可设置 USE_DYNAMIC_LAMBDA_ISOL=False 并指定 LAMBDA_ISOL_MANUAL
+    USE_DYNAMIC_LAMBDA_ISOL = True
+    LAMBDA_ISOL_MANUAL = None  # 例如设置为 0.0 / 10.0 等；为 None 时使用动态公式
+
+    # 是否允许孤立顶点 (LOSS 顶点) 出现
+    # 若不允许，则在 evaluate_solution 中对任意 LOSS 顶点施加强惩罚
+    ALLOW_ISOLATED_VERTICES = True
+    ISOLATED_VERTEX_PENALTY = 1000.0  # 每个孤立顶点的额外惩罚
 
     # 贪心/模型配置
     TOP_K_ROUTE_RATIO = 0.2  # 选取 P_Route 最高的 20% 节点作为初始骨干
-    MODEL_PATH = "svrap_best_model.pth"
+    # 模型目录和默认模型路径
+    MODEL_DIR = "models"
+    MODEL_PATH = os.path.join(MODEL_DIR, "svrap_best_model.pth")
 
 class SVRAPEnvironment:
-    def __init__(self, raw_data):
-        self.coords, self.norm_coords = self._parse_and_normalize(raw_data)
+    def __init__(self, raw_data: Optional[str] = None, dataset_path: Optional[str] = None):
+        """环境初始化
+
+        优先使用 dataset_path 指定的坐标文件 (每行 "x,y")；
+        若未指定，则回退到 raw_data 字符串或默认 RAW_DATA。
+        """
+
+        if dataset_path is not None:
+            if not os.path.exists(dataset_path):
+                raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
+            with open(dataset_path, "r", encoding="utf-8") as f:
+                raw_str = f.read()
+            self.dataset_name = os.path.basename(dataset_path)
+        else:
+            raw_str = raw_data if raw_data is not None else SVRAPConfig.RAW_DATA
+            self.dataset_name = "RAW_DATA_inline"
+
+        self.coords, self.norm_coords = self._parse_and_normalize(raw_str)
         self.n_nodes = len(self.coords) # 包含所有客户节点
         self.param_a = SVRAPConfig.PARAM_A
         torch.manual_seed(SVRAPConfig.SEED)
@@ -100,7 +131,11 @@ class SVRAPEnvironment:
         # 2. 计算隔离成本权重 (lambda_isol)
         # n 是客户顶点数量，这里 self.n_nodes 就是客户数 N=51
         # 公式: lambda_isol = 0.5 + 0.0004 * a^2 * n
-        self.lambda_isol = 0.5 + 0.0004 * (self.param_a ** 2) * self.n_nodes
+        dynamic_lambda_isol = 0.5 + 0.0004 * (self.param_a ** 2) * self.n_nodes
+        if SVRAPConfig.USE_DYNAMIC_LAMBDA_ISOL or SVRAPConfig.LAMBDA_ISOL_MANUAL is None:
+            self.lambda_isol = dynamic_lambda_isol
+        else:
+            self.lambda_isol = float(SVRAPConfig.LAMBDA_ISOL_MANUAL)
         
         # 3. 计算隔离成本 D_i (客户 i 分配给任何其他顶点 j 的最低成本)
         # D_i = min(d_ij | j != i)
@@ -115,8 +150,8 @@ class SVRAPEnvironment:
         # D_i 是每一行（客户 i）到所有其他客户的最小分配成本
         self.node_isolation_cost, _ = temp_alloc_cost.min(dim=1) 
         
-        print(f"SVRAP 环境初始化完成: a={self.param_a}, 客户节点 n={self.n_nodes}")
-        print(f"动态计算的 Lambda_isol: {self.lambda_isol:.4f}")
+        print(f"SVRAP 环境初始化完成: 数据集={self.dataset_name}, a={self.param_a}, 客户节点 n={self.n_nodes}")
+        print(f"Lambda_isol (动态/手动): {self.lambda_isol:.4f}")
         
     def _parse_and_normalize(self, raw_data):
         coords = []
@@ -199,6 +234,10 @@ class SVRAPEnvironment:
 
         # 最终总成本
         total_cost = tour_cost + allocation_cost + isolation_cost
+
+        # 如果不允许孤立顶点，则对所有 LOSS 节点施加强惩罚
+        if not SVRAPConfig.ALLOW_ISOLATED_VERTICES and len(loss_indices) > 0:
+            total_cost += SVRAPConfig.ISOLATED_VERTEX_PENALTY * len(loss_indices)
         
         # 额外惩罚：如果存在 ASSIGN 节点但没有 ROUTE 骨干
         if len(assign_indices) > 0 and len(backbone_indices) == 0:
@@ -250,10 +289,20 @@ class SVRAPNetwork(nn.Module):
 # 3. 训练与运行流程 (Training & Workflow)
 # ==========================================
 
-def run_pipeline(train_model=True):
+def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
+    """运行一轮 SVRAP 策略网络 + 导出流程。
+
+    - train_model: 是否进行训练（否则仅加载已有模型）
+    - dataset_path: 可选的数据集路径（每行 "x,y"），用于替代内置 RAW_DATA。
+    返回一个包含时间统计信息的 dict。
+    """
+
     # 1. 初始化
     torch.manual_seed(SVRAPConfig.SEED)
-    env = SVRAPEnvironment(SVRAPConfig.RAW_DATA)
+    # 确保模型目录存在
+    os.makedirs(SVRAPConfig.MODEL_DIR, exist_ok=True)
+
+    env = SVRAPEnvironment(SVRAPConfig.RAW_DATA, dataset_path=dataset_path)
     model = SVRAPNetwork(env.n_nodes)
     
     x = env.norm_coords.unsqueeze(0)
@@ -264,22 +313,41 @@ def run_pipeline(train_model=True):
     # --- 加载/训练逻辑 ---
     best_cost = float('inf')
     best_actions_tensor = None
-    
-    if os.path.exists(SVRAPConfig.MODEL_PATH) and not train_model:
+    # 记录“最佳解首次出现”的时间与轮次（相对训练开始的秒数）
+    best_found_time_from_start: Optional[float] = None
+    best_found_epoch: Optional[int] = None
+
+    # 针对不同数据集使用不同的模型文件，避免互相覆盖
+    if dataset_path is not None:
+        ds_stem = os.path.splitext(os.path.basename(dataset_path))[0]
+        model_path = os.path.join(SVRAPConfig.MODEL_DIR, f"svrap_best_model_{ds_stem}.pth")
+    else:
+        model_path = SVRAPConfig.MODEL_PATH
+
+    train_start_time: Optional[float] = None
+    train_end_time: Optional[float] = None
+    epochs_run: int = 0
+
+    if os.path.exists(model_path) and not train_model:
         # **加载已保存的模型**
-        print(f"[Found] 发现已保存模型: {SVRAPConfig.MODEL_PATH}。跳过训练，直接加载...")
-        checkpoint = torch.load(SVRAPConfig.MODEL_PATH)
+        print(f"[Found] 发现已保存模型: {model_path}。跳过训练，直接加载...")
+        checkpoint = torch.load(model_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         best_cost = checkpoint['best_cost']
         best_actions_tensor = checkpoint['best_actions_tensor']
+        # 兼容早期 checkpoint：若无字段则返回 None
+        best_found_epoch = checkpoint.get('best_found_epoch', None)
+        best_found_time_from_start = checkpoint.get('best_found_time_from_start', None)
         
     elif train_model:
         # **开始训练**
         optimizer = optim.Adam(model.parameters(), lr=SVRAPConfig.LR)
-        print(f"🚀 开始训练: 节点数 {env.n_nodes}, 目标: 最小化总成本")
+        print(f"🚀 开始训练: 数据集={env.dataset_name}, 节点数 {env.n_nodes}, 目标: 最小化总成本")
         
         baseline = 0
+        epochs_without_improve = 0
         model.train()
+        train_start_time = time.time()
         for epoch in range(SVRAPConfig.EPOCHS):
             optimizer.zero_grad()
             # 使用路由和分配成本作为注意力输入特征
@@ -293,13 +361,23 @@ def run_pipeline(train_model=True):
             if cost < best_cost:
                 best_cost = cost
                 best_actions_tensor = actions.clone().detach() 
-                
-                # 实时保存最佳模型
+                epochs_without_improve = 0
+
+                # 记录本次达到最佳解的时间与轮次
+                if train_start_time is not None:
+                    best_found_time_from_start = time.time() - train_start_time
+                best_found_epoch = epoch
+
+                # 实时保存最佳模型（连同元数据）
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'best_cost': best_cost,
                     'best_actions_tensor': best_actions_tensor,
-                }, SVRAPConfig.MODEL_PATH)
+                    'best_found_epoch': best_found_epoch,
+                    'best_found_time_from_start': best_found_time_from_start,
+                }, model_path)
+            else:
+                epochs_without_improve += 1
             
             reward = -cost
             if epoch == 0: baseline = reward
@@ -311,14 +389,24 @@ def run_pipeline(train_model=True):
             
             loss.backward()
             optimizer.step()
+
+            epochs_run = epoch + 1
             
             if epoch % 100 == 0:
                 actions_np = actions.squeeze().cpu().numpy()
                 route_count = (actions_np == 1).sum().item()
                 loss_count = (actions_np == 2).sum().item()
                 print(f"Epoch {epoch:04d} | Cost: {cost:.4f} | Best: {best_cost:.4f} | R/L Count: {route_count}/{loss_count}")
-        
-        print(f"\n🎉 训练完成。最优模型已保存到 {SVRAPConfig.MODEL_PATH}")
+
+                # 简单 Early Stopping: 训练到一定轮数后，如长期无提升则提前停止
+                if (epoch + 1) >= SVRAPConfig.MIN_EPOCHS and \
+                    epochs_without_improve >= SVRAPConfig.EARLY_STOP_PATIENCE:
+                    print(f"[EarlyStop] No improvement in best cost for {epochs_without_improve} epochs. Stop at epoch {epoch + 1}.")
+                    break
+
+        train_end_time = time.time()
+        print(f"\n🎉 训练完成。最优模型已保存到 {model_path}")
+        print(f"训练用时: {train_end_time - train_start_time:.2f} 秒")
 
     # 4. 最终结果展示和贪心选择
     print("\n" + "="*70)
@@ -334,7 +422,10 @@ def run_pipeline(train_model=True):
         
         print(f"最优解 - ROUTE 节点: {final_route}")
         print(f"最优解 - LOSS 节点:   {final_loss}")
-    
+
+    # 从这里开始计时推理与导出阶段
+    inference_start_time = time.time()
+
     model.eval()
     with torch.no_grad():
         final_logits = model(x, route_cost_tensor, alloc_cost_tensor)
@@ -350,7 +441,7 @@ def run_pipeline(train_model=True):
     n_nodes = env.n_nodes
     k = max(2, int(n_nodes * SVRAPConfig.TOP_K_ROUTE_RATIO)) # 确定贪心选择的数量 K
     greedy_backbone_indices = sorted_indices[:k].tolist() # 选取前 K 个节点作为初始骨干
-    
+
     # 评估这个贪心解的完整成本 (ROUTE=1, ASSIGN=0)
     greedy_actions = np.zeros(n_nodes, dtype=int)
     greedy_actions[greedy_backbone_indices] = 1 # ROUTE
@@ -404,6 +495,49 @@ def run_pipeline(train_model=True):
         print("Saved backbone indices to backbone_indices.txt")
     except Exception as e:
         print(f"Warning: failed to write backbone_indices.txt: {e}")
+
+    # 推理与导出阶段结束
+    inference_end_time = time.time()
+    inference_time_sec = inference_end_time - inference_start_time
+
+    # 统计最优动作中 ASSIGN / ROUTE / LOSS 的数量和占比
+    assign_count = route_count = loss_count = 0
+    assign_ratio = route_ratio = loss_ratio = 0.0
+    if best_actions_tensor is not None:
+        actions_np = np.array(final_actions, dtype=int)
+        total_nodes = actions_np.shape[0]
+        assign_count = int((actions_np == 0).sum())
+        route_count = int((actions_np == 1).sum())
+        loss_count = int((actions_np == 2).sum())
+        if total_nodes > 0:
+            assign_ratio = assign_count / total_nodes
+            route_ratio = route_count / total_nodes
+            loss_ratio = loss_count / total_nodes
+
+    train_time_sec = None
+    if train_start_time is not None and train_end_time is not None:
+        train_time_sec = train_end_time - train_start_time
+
+    metrics = {
+        "dataset_name": env.dataset_name,
+        "n_nodes": env.n_nodes,
+        "best_cost": float(best_cost),
+        "assign_count": assign_count,
+        "route_count": route_count,
+        "loss_count": loss_count,
+        "assign_ratio": assign_ratio,
+        "route_ratio": route_ratio,
+        "loss_ratio": loss_ratio,
+        "train_time_sec": train_time_sec,
+        "train_epochs_run": epochs_run,
+        "best_found_epoch": best_found_epoch,
+        "best_found_time_from_start_sec": best_found_time_from_start,
+        "inference_time_sec": inference_time_sec,
+        "greedy_backbone_size": len(greedy_backbone_indices),
+        "greedy_cost": float(greedy_cost),
+    }
+
+    return metrics
 
 
 if __name__ == "__main__":

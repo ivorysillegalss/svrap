@@ -2,6 +2,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <cmath>
+#include <algorithm>
 
 // Copliot
 
@@ -73,4 +75,47 @@ bool read_attention_probs(const std::string &filename,
   }
 
   return true;
+}
+
+// Calculate Shannon entropy for a single node
+// 计算信息熵 对应后期的搜索资源倾斜
+double calculate_node_entropy(const NodeProb &node) {
+  double entropy = 0.0;
+  const double epsilon = 1e-10; // 避免 log(0)
+  
+  std::vector<double> probs = {node.p_assign, node.p_route, node.p_loss};
+  
+  for (double p : probs) {
+    if (p > epsilon) {
+      entropy -= p * std::log2(p);
+    }
+  }
+  
+  return entropy;
+}
+
+// Calculate entropy for all nodes
+void calculate_all_entropies(const std::vector<NodeProb> &probs,
+                            std::vector<double> &out_entropies) {
+  out_entropies.clear();
+  out_entropies.reserve(probs.size());
+  
+  for (const auto &node : probs) {
+    out_entropies.push_back(calculate_node_entropy(node));
+  }
+}
+
+// Select nodes that need search focus based on entropy threshold
+// 高熵意味着不确定性高,需要更多搜索资源
+void select_high_entropy_nodes(const std::vector<NodeProb> &probs,
+                              double entropy_threshold,
+                              std::set<std::pair<int, int>> &out_node_coords) {
+  out_node_coords.clear();
+  
+  for (const auto &node : probs) {
+    double entropy = calculate_node_entropy(node);
+    if (entropy >= entropy_threshold) {
+      out_node_coords.insert({node.p.x, node.p.y});
+    }
+  }
 }

@@ -2,6 +2,7 @@
 #include "input.h"
 #include "attention_reader.h"
 #include "tabu_search.h"
+#include "entropy_strategy.h"
 #include <cmath>
 #include <exception>
 #include <iostream>
@@ -10,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <numeric>
 #include <io.h>
 #include <fcntl.h>
 
@@ -21,7 +23,8 @@
 #define PATH_RELINKING_TIMES 50
 #define DIVERSIFICATION 3
 #define TABU_LIST_LENGTH 15
-
+    double entropy_effective_threshold = 0.0;
+    EntropyStrategyType used_strategy_type = ENTROPY_STRATEGY_DEFAULT;
 GreedyLocalSearch
 greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
                     std::vector<std::vector<double>> distance,
@@ -126,8 +129,35 @@ int main() {
     // Copilot: Attempt to read attention probabilities produced by Python solver
     std::vector<NodeProb> node_probs;
     std::vector<Point> backbone_initial_route;
+    std::set<std::pair<int, int>> high_entropy_nodes;
+    double entropy_effective_threshold = 0.0;
+    
     if (read_attention_probs("attention_probs.csv", node_probs)) {
       std::cout << "Loaded attention probabilities for " << node_probs.size() << " nodes." << std::endl;
+      
+      // Calculate entropy for all nodes
+      std::vector<double> entropies;
+      calculate_all_entropies(node_probs, entropies);
+      
+      // Display entropy statistics
+      if (!entropies.empty()) {
+        double max_entropy = *std::max_element(entropies.begin(), entropies.end());
+        double min_entropy = *std::min_element(entropies.begin(), entropies.end());
+        double avg_entropy = std::accumulate(entropies.begin(), entropies.end(), 0.0) / entropies.size();
+        double max_possible = std::log2(3.0); // 3-class max entropy
+        std::cout << "Entropy stats: min=" << min_entropy << ", max=" << max_entropy 
+                  << ", avg=" << avg_entropy << ", max_possible=" << max_possible << std::endl;
+      }
+      
+      // Use strategy-pattern based selection (default: Top-40%)
+      EntropyStrategyType used_type = select_high_entropy_nodes_default(
+          node_probs, high_entropy_nodes, entropy_effective_threshold);
+      
+      std::cout << "Entropy strategy: " << entropy_strategy_type_to_string(used_type)
+                << ", selected " << high_entropy_nodes.size()
+                << " nodes (effective threshold=" << entropy_effective_threshold
+                << ") for focused search" << std::endl;
+      
       // Build initial backbone route by taking top-K p_route
       // K = max(2, int(n * 0.2)) — we use the same heuristic as Python
       size_t n = locations.size();
@@ -196,6 +226,11 @@ int main() {
         locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
         greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
         greedy_searcher.get_route(), greedy_searcher.get_cost());
+    
+    // Set entropy information for the tabu search if available
+    if (!high_entropy_nodes.empty()) {
+      tabu_seracher.set_entropy_info(high_entropy_nodes, entropy_effective_threshold);
+    }
 
     std::cout << "Tabu search start" << std::endl;
 

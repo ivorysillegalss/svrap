@@ -4,6 +4,7 @@
 #include "input.h"
 #include <cmath>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -41,6 +42,12 @@ public:
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<Point> &route, const std::double_t &cost);
 
+  // Set entropy information for nodes
+  // high_entropy_nodes: set of node coordinates that need search focus
+  // entropy_threshold: threshold value used to determine high entropy nodes
+  void set_entropy_info(const std::set<std::pair<int, int>> &high_entropy_nodes,
+                       double entropy_threshold);
+
   void search(int T, int Q, int TBL);
 
   const std::vector<int> &get_len_trend() const { return cost_trend_; }
@@ -62,6 +69,14 @@ private:
   // 返回的值
   std::vector<Point> iter_solution_;
   std::double_t best_cost_;
+  
+  // 熵相关信息
+  std::set<std::pair<int, int>> high_entropy_nodes_; // 高熵节点坐标集合
+  double entropy_threshold_; // 熵阈值
+  bool use_entropy_filter_; // 是否启用熵过滤
+
+  // 计算一个邻域操作所涉及点的“高熵得分”（高熵点比例，用于软偏置）
+  double compute_operation_entropy_score(const OpKey &key) const;
 
   // 多样化方法
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
@@ -70,9 +85,11 @@ private:
 
   std::tuple<std::vector<Point>, double>
   path_relinking(const std::vector<std::vector<Point>> &solution_set,
-                 std::map<std::pair<int, int>, VertexInfo> iter_dic);
-
-  // TODO 返回值类型优雅设置为类 对应原py代码中
+                std::map<std::pair<int, int>, VertexInfo> iter_dic);
+  
+  // 检查节点是否需要搜索资源倾斜（基于熵）
+  // 高熵节点需要更多搜索，低熵节点（确定性高）可以跳过
+  bool should_search_node(const Point &p) const;  // TODO 返回值类型优雅设置为类 对应原py代码中
   // operation_style_all =
   // [route,dic,newroute_cost,[twooptvertice[0],twooptvertice[1]]]的返回结构
   // (这里第四项有可能是string 也有可能是两个point)

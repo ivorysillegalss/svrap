@@ -33,7 +33,11 @@ make
 - C++ (greedy + tabu)
   - Reads `dataset.txt` coordinates (51 nodes)
   - Uses `attention_probs.csv` to build an initial backbone (10 backbone + 20 on-tour = 30 total in route)
-  - Greedy local search → Tabu search
+  - **Entropy-based optimization**: Calculates Shannon entropy for each node based on state probabilities
+    - High entropy nodes (uncertain states) → require more search resources
+    - Low entropy nodes (certain states from policy network) → skip to save search time
+    - Default entropy threshold: 0.8 (configurable in main.cpp)
+  - Greedy local search → Tabu search with entropy filtering
   - Recent best cost observed: 180.22
 
 ## Key files
@@ -53,6 +57,7 @@ make
 ## Notes
 - If `attention_probs.csv` is missing, C++ falls back to nearest-neighbor init.
 - Output text is ASCII-only to avoid console encoding issues on Windows.
+- **Entropy filtering**: The tabu search now focuses on high-uncertainty nodes identified by entropy calculation. This reduces wasted search effort on nodes where the policy network already has high confidence about their state (ASSIGN/ROUTE/LOSS). The entropy threshold can be adjusted in `main.cpp` (line ~132).
 
 ---
 
@@ -91,7 +96,11 @@ make
 - C++ (贪婪+禁忌)
   - 读取 `dataset.txt` 坐标集 (51个节点)
   - 使用 `attention_probs.csv` 构建初始骨干解 (10个骨干节点 + 20个在线节点 = 30个总节点)
-  - 贪婪局部搜索 → 禁忌搜索
+  - **基于信息熵的优化**: 根据节点状态概率计算香农熵
+    - 高熵节点 (状态不确定) → 需要更多搜索资源
+    - 低熵节点 (策略网络确定性高) → 跳过以节省搜索时间
+    - 默认熵阈值: 0.8 (可在 main.cpp 中配置)
+  - 贪婪局部搜索 → 带熵过滤的禁忌搜索
   - 最近获得的最优成本: 180.22
 
 ## 关键文件说明
@@ -111,3 +120,4 @@ make
 ## 注意事项
 - 如果缺少 `attention_probs.csv`, C++会降级使用最近邻初始化
 - 输出文本为ASCII格式，以避免Windows控制台编码问题
+- **熵过滤机制**: 禁忌搜索现在会专注于策略网络识别出的高不确定性节点。这减少了在策略网络已经对其状态 (ASSIGN/ROUTE/LOSS) 有高置信度的节点上浪费的搜索精力。熵阈值可以在 `main.cpp` (约第132行) 中调整。
