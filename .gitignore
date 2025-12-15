@@ -5,9 +5,9 @@
 *.sln
 
 # Ignore build artifacts
-build/
-bin/
-obj/
+/build/
+/bin/
+/obj/
 
 # Ignore temporary files
 *.log
@@ -22,20 +22,31 @@ obj/
 *.out
 *.exe
 
-# Ignore CMake/Make build files
-CMakeLists.txt.user
-Makefile.user
+# Ignore CMake/Make aux files
+/CMakeLists.txt.user
+/Makefile.user
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/Makefile
 
-# Ignore clangd index
-.cache/clangd/
+# Ignore clangd / VSCode indexes
+/.cache/clangd/
+/.vscode/
 
-# Ignore all text files that are specific to data
-tsp数据坐标集.txt
+# Ignore local data / large coordinate sets 
+/tsp数据坐标集.txt
+/formatted_dataset/
+/raw_dataset/
 
-# Ignore dependency directories
-node_modules/
-npm-debug.log
-yarn-error.log
+# Python cache
+__pycache__/
+*.pyc
+
+# Experiment outputs
+/results.csv
+/run.log
+/summary.log
 
 # Ignore MacOS specific files
 .DS_Store
@@ -44,4 +55,4 @@ yarn-error.log
 Thumbs.db
 
 # Build
-app
+/app

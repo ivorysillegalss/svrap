@@ -90,10 +90,13 @@ TabuSearch::TabuSearch(
     const std::vector<Point> &route, const std::double_t &cost)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route),
-      solution_cost_(cost), iter_solution_(route), best_cost_(cost) {
+      solution_cost_(cost), iter_solution_(route), best_cost_(cost),
+      champion_solution_(route), champion_vertex_map_(vertex_map),
+      champion_cost_(cost) {
   cost_trend_.push_back(cost);
+  // 初始解视为第一个 Champion，初始化频率统计
+  update_champion_frequencies(champion_solution_);
 }
-
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
            double, std::vector<Point>>
 TabuSearch ::operation_style(
@@ -112,7 +115,6 @@ TabuSearch ::operation_style(
   if (style_number == ADD) {
     auto add_dic = iter_dic;
     Point add_vertice;
-    bool found = false;
 
     // 安全地寻找一个不在路径上的点 (status == "N")
     // 为了防止死循环（如果所有点都在路径上），先收集所有 "N" 的点
@@ -130,25 +132,19 @@ TabuSearch ::operation_style(
 
     // 随机选一个
     add_vertice = candidates[std::uniform_int_distribution<int>(
-        0, candidates.size() - 1)(rng)];
+        0, static_cast<int>(candidates.size()) - 1)(rng)];
 
     // 更新 Map 状态
     add_dic[{add_vertice.x, add_vertice.y}].status = "Y";
 
-    // 更新其他 Off-tour 点的最近邻
-    // (因为新加入的点可能成为某些点的最近邻)
+    // 更新其他 Off-tour 点的最近邻（保守实现，交给成本函数兜底）
     std::pair<int, int> add_key = {add_vertice.x, add_vertice.y};
     size_t add_idx = add_dic.at(add_key).index;
 
     for (auto &kv : add_dic) {
       if (kv.second.status == "N") {
-        // 当前路外点的信息
         size_t off_idx = kv.second.index;
-
-        // 计算该路外点到新加入点的距离
         double new_dist = distance_[off_idx][add_idx];
-
-        // 比较并更新：如果新点更近，则更新 best_cost 和 best_vertex
         if (new_dist < kv.second.best_cost) {
           kv.second.best_cost = new_dist;
           kv.second.best_vertex = add_vertice;
@@ -156,7 +152,7 @@ TabuSearch ::operation_style(
       }
     }
 
-    // 寻找最佳插入位置
+    // 寻找该点在当前路径中的最佳插入位置
     std::vector<Point> best_route;
     double min_cost = std::numeric_limits<double>::max();
 
@@ -182,9 +178,10 @@ TabuSearch ::operation_style(
     auto drop_dic = iter_dic;
     auto drop_route = route;
 
-    // 随机删除
+    // 随机删除一个位置上的顶点
     int drop_index =
-        std::uniform_int_distribution<int>(0, drop_route.size() - 1)(rng);
+        std::uniform_int_distribution<int>(0,
+                                           static_cast<int>(drop_route.size()) - 1)(rng);
     Point d_vertice = drop_route[drop_index];
 
     drop_route.erase(drop_route.begin() + drop_index);
@@ -193,30 +190,7 @@ TabuSearch ::operation_style(
     VertexInfo &info = drop_dic[{d_vertice.x, d_vertice.y}];
     info.status = "N";
 
-    // 为新出来的路外点寻找最近的路内点
-    if (!drop_route.empty()) {
-      double best_dist = std::numeric_limits<double>::max();
-      Point best_p;
-      for (const auto &p : drop_route) {
-        // 注意：这里需要 distance 矩阵，但在 operation_style 里访问成员
-        // distance_ 是可以直接的
-        size_t idx1 = info.index;
-        size_t idx2 = iter_dic.at({p.x, p.y}).index;
-        double d = distance_[idx1][idx2];
-        if (d < best_dist) {
-          best_dist = d;
-          best_p = p;
-        }
-      }
-      info.best_cost = best_dist;
-      info.best_vertex = best_p;
-    } else {
-      info.best_cost = 0; // 路径为空，没有成本？或者无穷大
-    }
-
-    // 重新计算其他路外点（如果它们原本依附于被删除的点）
-    // 省略深度优化，直接交给 GreedyLocalSearch 计算 Cost
-
+    // 其余最近邻信息交由成本函数统一处理
     GreedyLocalSearch cal(drop_route, drop_dic, distance_);
     double i_cost = cal.tabu_cacl_cost();
 
@@ -232,24 +206,19 @@ TabuSearch ::operation_style(
     // 随机选两个不同的索引进行交换
     std::sample(indices.begin(), indices.end(), idx.begin(), 2, rng);
 
-    // 真正执行交换 Python 是在原 route 上直接 swap
     std::vector<Point> new_route = route;
     std::swap(new_route[idx[0]], new_route[idx[1]]);
 
-    // 计算交换后的真实成本（字典不变）
     GreedyLocalSearch calculator(new_route, iter_dic, distance_);
     double new_cost = calculator.tabu_cacl_cost();
 
-    // 记录被交换的两个点，用于禁忌表（顺序不重要，但要双向记录）
     std::vector<Point> operated = {route[idx[0]], route[idx[1]]};
     return {new_route, iter_dic, new_cost, operated};
 
   } else {
-    // panic
-    return {{}, {}, {}, {}};
+    return {route, iter_dic, std::numeric_limits<double>::max(), {}};
   }
 }
-
 // 辅助函数：插入最佳位置
 std::vector<Point>
 best_insert_position(const Point &p, const std::vector<Point> &route,
@@ -273,27 +242,25 @@ best_insert_position(const Point &p, const std::vector<Point> &route,
 }
 
 std::tuple<std::vector<Point>, double>
-TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
-                           std::map<std::pair<int, int>, VertexInfo> iter_dic) {
-  // 前置长度校验
-  if (solution_set.size() < 2) {
-    return {solution_set.back(), solution_cost_};
+TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
+                           const std::vector<Point> &new_champion,
+                           std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                           std::vector<OpKey> &relink_moves) {
+  // 如果缺少前一个 Champion，无法进行路径重连
+  if (prev_champion.empty() || new_champion.empty()) {
+    return {new_champion, solution_cost_};
   }
 
-  const std::vector<Point> &last_solution =
-      solution_set[solution_set.size() - 2];
-  const std::vector<Point> &current_solution = solution_set.back();
-
   // 找出两个解之间“状态不同”的点
-  std::unordered_set<Point, PointHash> current_set(current_solution.begin(),
-                                                   current_solution.end());
-  std::unordered_set<Point, PointHash> last_set(last_solution.begin(),
-                                                last_solution.end());
+  std::unordered_set<Point, PointHash> current_set(new_champion.begin(),
+                                                   new_champion.end());
+  std::unordered_set<Point, PointHash> last_set(prev_champion.begin(),
+                                                prev_champion.end());
   std::vector<Point> state_change;
 
   // last → current 中消失的点（从路径中被移出）
   // 1. 找出 target 有但 base 没有的点 (需要插入)
-  for (const Point &p : last_solution) {
+  for (const Point &p : prev_champion) {
     if (current_set.count(p) == 0) {
       state_change.push_back(p);
     }
@@ -301,30 +268,35 @@ TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
 
   // current → last 中新增的点（被插入路径）
   // 找出 base 有但 target 没有的点 (需要删除)
-  for (const Point &p : current_solution) {
+  for (const Point &p : new_champion) {
     if (last_set.count(p) == 0) {
       state_change.push_back(p);
     }
   }
-
-  const size_t n_solutions = solution_set.size();
   if (state_change.empty()) {
-    GreedyLocalSearch calc(last_solution, iter_dic,distance_);
-    return {last_solution, calc.tabu_cacl_cost()};
+    GreedyLocalSearch calc(prev_champion, iter_dic, distance_);
+    return {prev_champion, calc.tabu_cacl_cost()};
   }
 
-  // 2. 计算每个改变点在历史解集中出现的比例 (vertice_on_probabity)
+  // 2. 基于 Champion 频率计算 m(i)
   std::vector<double> vertice_on_probability;
   vertice_on_probability.reserve(state_change.size());
 
   for (const Point &p : state_change) {
-    int count = 0; // 记录点 p 出现在历史解中的次数
-    for (const auto &sol : solution_set) {
-      if (std::find(sol.begin(), sol.end(), p) != sol.end()) {
-        ++count;
-      }
+    std::pair<int, int> key = {p.x, p.y};
+    int on_cnt = 0;
+    int off_cnt = 0;
+    auto it_on = champion_on_count_.find(key);
+    if (it_on != champion_on_count_.end()) {
+      on_cnt = it_on->second;
     }
-    vertice_on_probability.push_back(static_cast<double>(count) / n_solutions);
+    auto it_off = champion_off_count_.find(key);
+    if (it_off != champion_off_count_.end()) {
+      off_cnt = it_off->second;
+    }
+    int total = std::max(1, on_cnt + off_cnt);
+    vertice_on_probability.push_back(static_cast<double>(on_cnt) /
+                                     static_cast<double>(total));
   }
 
   // 3. 构建最终的概率列表 (vertice_probability)
@@ -336,16 +308,16 @@ TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
     bool is_in_current = current_set.count(p) > 0;
 
     if (is_in_current) {
-      vertice_probability.push_back(
-          vertice_on_probability[i]); // on_tour 比例 (目标是保留)
+      // m(i) = m_on(i) 当在 Champion B 中为 on-tour
+      vertice_probability.push_back(vertice_on_probability[i]);
     } else {
-      vertice_probability.push_back(
-          1.0 - vertice_on_probability[i]); // off_tour 比例 (目标是删除)
+      // m(i) = m_off(i) = 1 - m_on(i) 当在 Champion B 中为 off-tour
+      vertice_probability.push_back(1.0 - vertice_on_probability[i]);
     }
   }
 
   // 4. 迭代移动：从 last_solution 转向 current_solution
-  auto temp_solution = last_solution;
+  auto temp_solution = prev_champion;
 
   // 循环直到所有差异点都处理完毕
   while (!state_change.empty()) {
@@ -366,6 +338,10 @@ TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
       temp_solution =
           best_insert_position(p, temp_solution, iter_dic, distance_);
       iter_dic.at({p.x, p.y}).status = "Y"; // 标记为已在路径上
+      // 记录一次 ADD 操作，用于将其逆操作 (DROP) 设为 Tabu
+      std::vector<Point> op_vec = {p};
+      OpKey key = op_vec;
+      relink_moves.push_back(key);
     } else {
       // 该点最终不在路径中 → 直接删除
       temp_solution.erase(
@@ -374,6 +350,10 @@ TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
       // Map 状态更新，但 Off-tour best_cost/best_vertex
       // 不在这里更新，依赖最终的 GreedyLocalSearch
       iter_dic.at({p.x, p.y}).status = "N"; // 标记为已在路外
+      // 记录一次 DROP 操作，用于将其逆操作 (ADD) 设为 Tabu
+      std::vector<Point> op_vec = {p};
+      OpKey key = op_vec;
+      relink_moves.push_back(key);
     }
 
     // 删除已处理的项目
@@ -389,12 +369,12 @@ TabuSearch::path_relinking(const std::vector<std::vector<Point>> &solution_set,
 }
 
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
-TabuSearch::diversication(const std::vector<std::vector<Point>> &solution_set,
+TabuSearch::diversication(const std::vector<Point> &champion_route,
                           std::map<std::pair<int, int>, VertexInfo> iter_dic,
-                          int number) {
-  auto current_solution = solution_set.back();
+                          std::vector<OpKey> &diversification_moves) {
+  auto current_solution = champion_route;
 
-  // 1. 区分 On/Off Vertice
+  // 1. 区分 On/Off Vertice（基于 Champion 解）
   std::vector<Point> on_vertice;
   std::vector<Point> off_vertice;
   std::unordered_set<Point, PointHash> current_set(current_solution.begin(),
@@ -407,141 +387,146 @@ TabuSearch::diversication(const std::vector<std::vector<Point>> &solution_set,
       off_vertice.push_back(loc); // 不在路径上
     }
   }
-  // 2. 计算概率
-  std::vector<double>
-      onvert_probability; // On-tour 点的“缺席”概率 (希望移除缺席概率最高的)
-  std::vector<double>
-      offvert_probability; // Off-tour 点的“出席”概率 (希望加入出席概率最高的)
+  // 2. 计算 m_on(i)、m_off(i) 并基于 m(i) = m_on(i) 或 m_off(i)
+  //    进行多样化。这里直接从 Champion 频率统计中读取。
+  std::vector<std::pair<Point, double>> candidate_vertices;
+  candidate_vertices.reserve(locations_.size());
 
-  int len_set = solution_set.size();
-
-  // 计算 On-Tour 点的缺席概率
-  for (const auto &onvert : on_vertice) {
-    int absent_count = 0;
-    for (const auto &sol : solution_set) {
-      if (std::find(sol.begin(), sol.end(), onvert) == sol.end()) {
-        absent_count++;
-      }
+  for (const auto &loc : locations_) {
+    std::pair<int, int> key = {loc.x, loc.y};
+    int on_cnt = 0;
+    int off_cnt = 0;
+    auto it_on = champion_on_count_.find(key);
+    if (it_on != champion_on_count_.end()) {
+      on_cnt = it_on->second;
     }
-    onvert_probability.push_back(static_cast<double>(absent_count) / len_set);
-  }
-
-  // 计算 Off-Tour 点的出席概率 (1.0 - 缺席概率)
-  for (const auto &offvert : off_vertice) {
-    int absent_count = 0;
-    for (const auto &sol : solution_set) {
-      if (std::find(sol.begin(), sol.end(), offvert) == sol.end()) {
-        absent_count++;
-      }
+    auto it_off = champion_off_count_.find(key);
+    if (it_off != champion_off_count_.end()) {
+      off_cnt = it_off->second;
     }
-    offvert_probability.push_back(
-        1.0 - (static_cast<double>(absent_count) / len_set));
-  }
+    int total = std::max(1, on_cnt + off_cnt);
 
-  // 3. 执行 Diversification 交换 (number 次)
-  // 复制列表，因为要在循环中动态删除
-  auto onvert_prob_copy = onvert_probability;
-  auto offvert_prob_copy = offvert_probability;
-  auto on_vertice_copy = on_vertice;
-  auto off_vertice_copy = off_vertice;
-
-  for (int i = 0; i < number; i++) {
-    if (onvert_prob_copy.empty() || offvert_prob_copy.empty())
-      break;
-
-    // 1. 找出 On-tour 点中，缺席概率最高的 (最应该被移除的)
-    auto max_onvert_prob_it =
-        std::max_element(onvert_prob_copy.begin(), onvert_prob_copy.end());
-    size_t max_onvert_prob_index =
-        std::distance(onvert_prob_copy.begin(), max_onvert_prob_it);
-
-    // 2. 找出 Off-tour 点中，出席概率最高的 (最应该被加入的)
-    auto max_offvert_prob_it =
-        std::max_element(offvert_prob_copy.begin(), offvert_prob_copy.end());
-    size_t max_offvert_prob_index =
-        std::distance(offvert_prob_copy.begin(), max_offvert_prob_it);
-
-    Point max_onvert = on_vertice_copy[max_onvert_prob_index];
-    Point max_offvert = off_vertice_copy[max_offvert_prob_index];
-
-    // 执行替换操作：将 max_onvert 替换为 max_offvert
-    auto it_to_replace =
-        std::find(current_solution.begin(), current_solution.end(), max_onvert);
-    if (it_to_replace != current_solution.end()) {
-      *it_to_replace = max_offvert;
+    bool is_on = current_set.count(loc) > 0;
+    double m_i = 0.0;
+    if (is_on) {
+      m_i = static_cast<double>(on_cnt) / static_cast<double>(total);
     } else {
-      // 理论上不应发生
-      continue;
+      m_i = static_cast<double>(off_cnt) / static_cast<double>(total);
     }
+    candidate_vertices.push_back({loc, m_i});
+  }
 
-    auto key = [](const Point &p) { return std::pair{p.x, p.y}; };
+  // 按照 m(i) 降序排序
+  std::sort(candidate_vertices.begin(), candidate_vertices.end(),
+            [](const auto &a, const auto &b) {
+              return a.second > b.second;
+            });
 
-    // 更新 Map 状态
-    iter_dic.at(key(max_onvert)).status = "N";  // 换出 -> 路外
-    iter_dic.at(key(max_offvert)).status = "Y"; // 换进 -> 路内
+  // 3. 对前 n/2 个顶点执行“状态反转” (ADD 或 DROP)
+  int n = static_cast<int>(locations_.size());
+  int diversify_moves = n / 2;
 
-    // 从概率列表中移除已选择的项 (注意顺序：先概率后点)
-    onvert_prob_copy.erase(max_onvert_prob_it);
-    offvert_prob_copy.erase(max_offvert_prob_it);
+  auto key_of = [](const Point &p) { return std::pair{p.x, p.y}; };
 
-    // 从点列表中移除已选择的项
-    on_vertice_copy.erase(on_vertice_copy.begin() + max_onvert_prob_index);
-    off_vertice_copy.erase(off_vertice_copy.begin() + max_offvert_prob_index);
+  for (int k = 0; k < diversify_moves && k < (int)candidate_vertices.size();
+       ++k) {
+    const Point &p = candidate_vertices[k].first;
+    bool is_on = current_set.count(p) > 0;
+    auto pt_key = key_of(p);
 
-    // 4. 更新所有路外点 (status == "N") 的最近邻信息
-    // 只有 max_onvert 变为路外点，其他路外点需要检查 max_offvert
-    // 是否成为新的最近邻。 但最安全的是重新计算所有路外点到新路径的最近邻
-    for (auto &[pt, info] : iter_dic) {
-      if (info.status != "N")
+    if (is_on) {
+      // DROP: 从路径中删除
+      auto it = std::find(current_solution.begin(), current_solution.end(), p);
+      if (it == current_solution.end())
         continue;
+      current_solution.erase(it);
+      iter_dic.at(pt_key).status = "N";
 
-      double best_cost = std::numeric_limits<double>::max();
-      Point best_pred{};
+      // 记录 Tabu 反向 (ADD) 的 Key
+      std::vector<Point> op_vec = {p};
+      OpKey key = op_vec;
+      diversification_moves.push_back(key);
+    } else {
+      // ADD: 插入到路径中，对应成本增加最小的位置
+      current_solution =
+          best_insert_position(p, current_solution, iter_dic, distance_);
+      iter_dic.at(pt_key).status = "Y";
 
-      for (const Point &on : current_solution) {
-        // 确保 on 点在字典中，且状态为 Y (虽然 Map 状态已更新，保险起见)
-        if (iter_dic.at({on.x, on.y}).status == "Y") {
-          size_t i = iter_dic.at({on.x, on.y}).index;
-          size_t j = info.index;
+      std::vector<Point> op_vec = {p};
+      OpKey key = op_vec;
+      diversification_moves.push_back(key);
+      current_set.insert(p);
+    }
+  }
 
-          double cost = distance_[i][j];
-          if (cost < best_cost) {
-            best_cost = cost;
-            best_pred = on;
-          }
+  // 4. 更新所有路外点 (status == "N") 的最近邻信息
+  for (auto &[pt, info] : iter_dic) {
+    if (info.status != "N")
+      continue;
+
+    double best_cost = std::numeric_limits<double>::max();
+    Point best_pred{};
+
+    for (const Point &on : current_solution) {
+      if (iter_dic.at({on.x, on.y}).status == "Y") {
+        size_t i = iter_dic.at({on.x, on.y}).index;
+        size_t j = info.index;
+        double cost = distance_[i][j];
+        if (cost < best_cost) {
+          best_cost = cost;
+          best_pred = on;
         }
       }
-
-      info.best_vertex = best_pred;
-      info.best_cost = best_cost;
     }
+
+    info.best_vertex = best_pred;
+    info.best_cost = best_cost;
   }
 
   return {current_solution, iter_dic};
 }
 
+void TabuSearch::update_champion_frequencies(
+    const std::vector<Point> &champion_route) {
+  champion_sample_count_++;
+
+  std::unordered_set<Point, PointHash> route_set(champion_route.begin(),
+                                                 champion_route.end());
+
+  for (const auto &loc : locations_) {
+    std::pair<int, int> key = {loc.x, loc.y};
+    if (route_set.count(loc) > 0) {
+      champion_on_count_[key]++;
+    } else {
+      champion_off_count_[key]++;
+    }
+  }
+}
+
 void TabuSearch::search(int T, int Q, int TBL) {
-  int t = 0, q = 0;
-  // t q 代表当前已经执行了路径重连和多样化的次数
+  int q = 0; // 已执行的多样化次数
 
-  std::vector<std::vector<Point>> solution_set;
-  solution_set.push_back(route_);
-
-  // 当前最优解
-  // 对应itersolution = copy.copy(firstsolution)
+  // 当前解
   std::vector<Point> current_sol = route_;
   // 当前的迭代解
   auto current_dic = vertex_map_;
 
   TabuInfo tabu(TBL);
-  // 初始化禁忌搜索对象
+
+  // 统计自上一个 Champion 以来的 MOVE 计数
+  int move_since_champion_adddrop = 0;
+  int move_since_champion_twoopt = 0;
 
   int iter_count = 0;
+
+  // 计算当前解的成本，用于判断“改进”或“非改进”移动
+  GreedyLocalSearch init_calc(current_sol, current_dic, distance_);
+  double current_cost = init_calc.tabu_cacl_cost();
 
   while (iter_count < MAX_TOTAL_ITER) {
     iter_count++;
 
-    // 1. 生成邻域 (Candidate List)
+    // 1. 生成邻域 (Candidate List) — 使用随机 operation_style 与上一次相同
     using Candidate =
         std::tuple<double, std::vector<Point>,
                    std::map<std::pair<int, int>, VertexInfo>, OpKey>;
@@ -549,12 +534,14 @@ void TabuSearch::search(int T, int Q, int TBL) {
 
     int valid_neighbors = 0;
     int attempts = 0;
-    while (valid_neighbors < 50 && attempts < 200) { // 尝试生成 50 个邻域解
+    const int MAX_NEIGHBORS = 50;
+    while (valid_neighbors < MAX_NEIGHBORS && attempts < 200) {
       attempts++;
       auto [n_route, n_dic, n_cost, n_op] =
           operation_style(current_sol, current_dic);
 
-      if (n_op.empty() || n_cost == std::numeric_limits<double>::max())
+      if (n_op.empty() ||
+          n_cost == std::numeric_limits<double>::max())
         continue;
 
       OpKey key;
@@ -565,7 +552,6 @@ void TabuSearch::search(int T, int Q, int TBL) {
         key = n_op; // Add/Drop: size 1
       }
 
-      // 检查这个操作是否已经被尝试过 (避免重复计算)
       bool already_seen = false;
       for (const auto &cand : candidates) {
         if (std::get<3>(cand) == key) {
@@ -583,93 +569,200 @@ void TabuSearch::search(int T, int Q, int TBL) {
     if (candidates.empty())
       break;
 
-    // 2. 选择最优邻域 (Best Fit)
+    // 2. 局部改进阶段 (4a)：按 TWOOPT → DROP → ADD 顺序寻找改进移动
     std::sort(candidates.begin(), candidates.end(),
               [](const auto &a, const auto &b) {
                 return std::get<0>(a) < std::get<0>(b);
               });
 
-    bool found_move = false;
-    double best_candidate_cost = 0;
+    bool found_improving_move = false;
+    double chosen_cost = 0.0;
     OpKey move_key;
+    int move_type = 0;
+    const int style_order[3] = {TWOOPT, DROP, ADD};
 
-    for (const auto &cand : candidates) {
-      double c_cost = std::get<0>(cand);
-      const auto &c_key = std::get<3>(cand);
+    for (int style : style_order) {
+      for (const auto &cand : candidates) {
+        double c_cost = std::get<0>(cand);
+        const auto &cand_route = std::get<1>(cand);
+        const auto &cand_dic = std::get<2>(cand);
+        const auto &c_key = std::get<3>(cand);
 
-      bool is_tabu = tabu.is_tabu_iter(c_key);
+        int old_size = static_cast<int>(current_sol.size());
+        int new_size = static_cast<int>(cand_route.size());
+        int this_type;
+        if (new_size > old_size)
+          this_type = ADD;
+        else if (new_size < old_size)
+          this_type = DROP;
+        else
+          this_type = TWOOPT;
 
-      // Aspiration Criteria (渴望准则): 禁忌但更优 -> 破禁
-      // OR 移动非禁忌
-      if (!is_tabu || c_cost < best_cost_) {
-        // 接受此移动
-        current_sol = std::get<1>(cand);
-        current_dic = std::get<2>(cand);
-        best_candidate_cost = c_cost;
+        if (this_type != style)
+          continue; // 按顺序先看 TWOOPT，再 DROP，再 ADD
+
+        bool is_tabu = tabu.is_tabu_iter(c_key);
+        bool aspiration = (c_cost < champion_cost_ - 1e-9);
+
+        // 仅接受改进移动 (c_cost < current_cost)，且满足禁忌/破禁规则
+        if ((is_tabu && !aspiration) || c_cost >= current_cost - 1e-9)
+          continue;
+
+        // 接受该改进移动
+        current_sol = cand_route;
+        current_dic = cand_dic;
+        current_cost = c_cost;
+        chosen_cost = c_cost;
         move_key = c_key;
-        found_move = true;
+        move_type = this_type;
+        found_improving_move = true;
         break;
       }
+      if (found_improving_move)
+        break;
     }
 
-    if (!found_move) {
-      // 如果找不到非禁忌或破禁忌的移动，强制停滞
-      t++;
-      tabu.update_tabu();
-    } else {
-      // 执行移动并更新禁忌表
-      tabu.add_tabu_iter(move_key, TBL);
-      tabu.update_tabu();
+    bool performed_diversification = false;
 
-      // 3. 更新全局最优
-      if (best_candidate_cost < best_cost_) {
-        best_cost_ = best_candidate_cost;
-        iter_solution_ = current_sol;
-        solution_set.push_back(current_sol);
-        cost_trend_.push_back(best_cost_);
-        t = 0; // 重置停滞计数器
+    // 若没有找到改进移动，则根据 4c/4d 进行多样化或选取最佳非改进移动
+    if (!found_improving_move) {
+      // 4c. 若从当前 Champion 出发已执行足够多 ADD/DROP 或 TWOOPT
+      // 移动而仍未发现新 Champion，则多样化
+      const int ADD_DROP_LIMIT = 20;
+      const int TWOOPT_LIMIT = 15;
 
-        // 路径重连
-        auto [pr_sol, pr_cost] = path_relinking(solution_set, current_dic);
-        if (pr_cost < best_cost_) {
-          best_cost_ = pr_cost;
-          iter_solution_ = pr_sol;
-          current_sol = pr_sol;
-          // 更新 solution_set 中的最优解
-          if (!solution_set.empty())
-            solution_set.back() = pr_sol;
-          cost_trend_.push_back(best_cost_);
+      if (move_since_champion_adddrop >= ADD_DROP_LIMIT ||
+          move_since_champion_twoopt >= TWOOPT_LIMIT) {
+        q++;
+        if (q >= Q)
+          break; // 两次多样化后终止
+
+        tabu.reset_list();
+
+        std::vector<OpKey> div_moves;
+        auto [div_sol, div_dic] =
+            diversication(champion_solution_, champion_vertex_map_,
+                          div_moves);
+        current_sol = div_sol;
+        current_dic = div_dic;
+
+        for (const auto &op : div_moves) {
+          tabu.add_tabu_iter(op, TBL);
         }
-      } else {
-        t++; // 停滞
+        tabu.update_tabu();
+
+        GreedyLocalSearch calc(current_sol, current_dic, distance_);
+        double div_cost = calc.tabu_cacl_cost();
+        current_cost = div_cost;
+
+        if (div_cost < best_cost_ - 1e-9) {
+          champion_solution_ = current_sol;
+          champion_vertex_map_ = current_dic;
+          champion_cost_ = div_cost;
+          best_cost_ = div_cost;
+          iter_solution_ = current_sol;
+          cost_trend_.push_back(best_cost_);
+
+          update_champion_frequencies(champion_solution_);
+        }
+
+        move_since_champion_adddrop = 0;
+        move_since_champion_twoopt = 0;
+        performed_diversification = true;
+
+        // 进入下一轮迭代
+        continue;
+      }
+
+      // 4d. 若既未触发路径重连也未多样化，则选择“最佳非改进”移动
+      bool found_non_improving = false;
+      for (const auto &cand : candidates) {
+        double c_cost = std::get<0>(cand);
+        const auto &cand_route = std::get<1>(cand);
+        const auto &cand_dic = std::get<2>(cand);
+        const auto &c_key = std::get<3>(cand);
+
+        bool is_tabu = tabu.is_tabu_iter(c_key);
+        if (is_tabu)
+          continue; // 4d 要求非禁忌
+
+        if (c_cost < current_cost - 1e-9)
+          continue; // 这里只考虑非改进移动
+
+        // 判定移动类型
+        int old_size = static_cast<int>(current_sol.size());
+        int new_size = static_cast<int>(cand_route.size());
+        if (new_size > old_size)
+          move_type = ADD;
+        else if (new_size < old_size)
+          move_type = DROP;
+        else
+          move_type = TWOOPT;
+
+        current_sol = cand_route;
+        current_dic = cand_dic;
+        current_cost = c_cost;
+        chosen_cost = c_cost;
+        move_key = c_key;
+        found_non_improving = true;
+        break; // 借由 candidates 已排序，首个满足者即为“最佳”
+      }
+
+      if (!found_non_improving) {
+        // 没有任何可行的非改进移动
+        tabu.update_tabu();
+        continue;
       }
     }
 
-    // 4. 多样化 (Diversification)
-    if (t >= T) {
-      q++;
-      if (q > Q)
-        break; // 达到最大多样化次数，退出
+    // 执行移动并更新禁忌表（包括 4a 的改进移动或 4d 的非改进移动）
+    tabu.add_tabu_iter(move_key, TBL);
+    tabu.update_tabu();
 
-      auto [div_sol, div_dic] =
-          diversication(solution_set, current_dic, DIVERSICATION_TIMES);
-      current_sol = div_sol;
-      current_dic = div_dic;
+    // 统计自当前 Champion 以来的移动次数
+    if (move_type == TWOOPT) {
+      move_since_champion_twoopt++;
+    } else {
+      move_since_champion_adddrop++;
+    }
 
-      // 重新计算多样化后的成本作为新的初始解成本
-      GreedyLocalSearch calc(current_sol, current_dic,distance_);
-      double div_cost = calc.tabu_cacl_cost();
+    // 3. 更新 Champion（全局最优解）及路径重连（4b）
+    if (chosen_cost < champion_cost_ - 1e-9) {
+      prev_champion_solution_ = champion_solution_;
+      champion_solution_ = current_sol;
+      champion_vertex_map_ = current_dic;
+      champion_cost_ = chosen_cost;
+      best_cost_ = chosen_cost;
+      iter_solution_ = current_sol;
+      cost_trend_.push_back(best_cost_);
 
-      if (div_cost < best_cost_) {
-        best_cost_ = div_cost;
-        iter_solution_ = current_sol;
+      update_champion_frequencies(champion_solution_);
+
+      // 路径重连：在前一个 Champion 与新 Champion 之间
+      std::vector<OpKey> pr_moves;
+      auto [pr_sol, pr_cost] =
+          path_relinking(prev_champion_solution_, champion_solution_,
+                         champion_vertex_map_, pr_moves);
+
+      for (const auto &op : pr_moves) {
+        tabu.add_tabu_iter(op, TBL);
+      }
+      tabu.update_tabu();
+
+      if (pr_cost < best_cost_ - 1e-9) {
+        champion_solution_ = pr_sol;
+        champion_cost_ = pr_cost;
+        best_cost_ = pr_cost;
+        iter_solution_ = pr_sol;
         cost_trend_.push_back(best_cost_);
+        current_sol = pr_sol;
+        current_cost = pr_cost;
+
+        update_champion_frequencies(champion_solution_);
       }
 
-      solution_set.push_back(current_sol); // 记录新的解
-
-      t = 0;
-      tabu.reset_list(); // 多样化后通常重置禁忌表
+      move_since_champion_adddrop = 0;
+      move_since_champion_twoopt = 0;
     }
   }
 

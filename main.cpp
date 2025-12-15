@@ -2,6 +2,7 @@
 #include "input.h"
 #include "tabu_search.h"
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <map>
@@ -10,7 +11,8 @@
 #include <vector>
 
 #define PATH_RELINKING_TIMES 50
-#define DIVERSIFICATION 3
+// 论文中终止条件：执行两次多样化后停止
+#define DIVERSIFICATION 2
 #define TABU_LIST_LENGTH 15
 
 GreedyLocalSearch
@@ -27,11 +29,13 @@ greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
   // 后续使用贪婪局部搜索进行优化
   std::vector<Point> initial_route =
       nearest_neighbour(ontour, distance, vertex_map);
-  std::cout << "初始路径：" << std::endl;
-  for (const auto &p : initial_route) {
-    std::cout << "(" << p.x << ", " << p.y << ")" << std::endl;
-  }
-  std::cout << "初始路径长度：" << initial_route.size() << std::endl;
+  // 调试输出已注释，避免在批量实验时生成过多日志。
+  // 如需查看初始路径，可以取消下面注释。
+  // std::cout << "初始路径：" << std::endl;
+  // for (const auto &p : initial_route) {
+  //   std::cout << "(" << p.x << ", " << p.y << ")" << std::endl;
+  // }
+  // std::cout << "初始路径长度：" << initial_route.size() << std::endl;
 
   // 带入贪婪局部搜索第一步时的初始解
   GreedyLocalSearch solver(locations, distance, ontour, offtour, vertex_map,
@@ -52,65 +56,120 @@ tabu_search(const std::vector<Point> &locations,
   return solver;
 }
 
-int main() {
+int main(int argc, char **argv) {
   try {
-    // 加载读取坐标集
-    std::string filename = "tsp数据坐标集.txt";
-    std::vector<Point> locations;
-    read_coordinates(filename, locations);
-    std::cout << "Read" << locations.size() << " points." << std::endl;
+    // 可选：通过命令行第一个参数设置 ALPHA
+    // 例如: svrap.exe 3  -> ALPHA = 3.0
+    if (argc >= 2) {
+      try {
+        ALPHA = std::atof(argv[1]);
+        std::cout << "Using ALPHA = " << ALPHA << std::endl;
+      } catch (...) {
+        std::cerr << "Warning: failed to parse ALPHA from argv[1], keep default "
+                  << ALPHA << std::endl;
+      }
+    } else {
+      std::cout << "Using default ALPHA = " << ALPHA << std::endl;
+    }
 
-    // 计算距离
-    std::vector<std::vector<double>> distance;
-    compute_distances(locations, distance);
-    std::cout << "Compute distance matrix." << std::endl;
+    // 如果提供了第二个参数，则仅针对该数据集运行；
+    // 否则批量处理 formatted_dataset 目录下的所有标准实例。
+    std::vector<std::string> instance_files;
+    if (argc >= 3) {
+      instance_files.push_back(argv[2]);
+    } else {
+      instance_files = {
+          "formatted_dataset/berlin52.txt",  "formatted_dataset/bier127.txt",
+          "formatted_dataset/ch130.txt",     "formatted_dataset/ch150.txt",
+          "formatted_dataset/d198.txt",      "formatted_dataset/d493.txt",
+          "formatted_dataset/eil101.txt",    "formatted_dataset/eil51.txt",
+          "formatted_dataset/eil76.txt",     "formatted_dataset/fl1577.txt",
+          "formatted_dataset/gr120.txt",     "formatted_dataset/gr137.txt",
+          "formatted_dataset/gr96.txt",      "formatted_dataset/kroA100.txt",
+          "formatted_dataset/kroA150.txt",   "formatted_dataset/kroA200.txt",
+          "formatted_dataset/kroB100.txt",   "formatted_dataset/kroB150.txt",
+          "formatted_dataset/kroB200.txt",   "formatted_dataset/kroC100.txt",
+          "formatted_dataset/kroD100.txt",   "formatted_dataset/kroE100.txt",
+          "formatted_dataset/lin105.txt",    "formatted_dataset/pr107.txt",
+          "formatted_dataset/pr124.txt",     "formatted_dataset/pr136.txt",
+          "formatted_dataset/pr144.txt",     "formatted_dataset/pr152.txt",
+          "formatted_dataset/pr76.txt",      "formatted_dataset/rat195.txt",
+          "formatted_dataset/rat783.txt",    "formatted_dataset/rat99.txt",
+          "formatted_dataset/rd100.txt",     "formatted_dataset/st70.txt",
+          "formatted_dataset/u159.txt"};
+    }
 
-    // 根据当前路径上与否区分点类
-    std::vector<Point> ontour, offtour;
-    classify_points(locations, ontour, offtour, A_VALUE, B_VALUE,
-                    BOUNDARY_VALUE);
+    for (const auto &file : instance_files) {
+      try {
+        std::cout << "==============================\n";
+        std::cout << "Instance: " << file << " (ALPHA=" << ALPHA << ")\n";
 
-    std::cout << "Points in ontour size: " << ontour.size() << std::endl;
-    std::cout << "Points in offtour size: " << offtour.size() << std::endl;
+        // 每个实例单独读取坐标
+        std::vector<Point> locations;
+        read_coordinates(file, locations);
+        std::cout << "Read " << locations.size() << " points." << std::endl;
 
-    // std::cout << "Ontour points:\n";
-    // for (const auto &p : ontour) {
-    //   std::cout << "(" << p.x << ", " << p.y << ")\n";
-    // }
-    // std::cout << "Offtour points:\n";
-    // for (const auto &p : offtour) {
-    //   std::cout << "(" << p.x << ", " << p.y << ")\n";
-    // }
+        // 为该实例尝试加载对应的隔离成本文件：
+        // 例如 formatted_dataset/eil76_iso.txt
+        std::string iso_file = file;
+        if (iso_file.size() >= 4 &&
+            iso_file.substr(iso_file.size() - 4) == ".txt") {
+          iso_file.insert(iso_file.size() - 4, "_iso");
+        } else {
+          iso_file += "_iso";
+        }
+        read_isolation_costs(iso_file);
 
-    // 构建点信息集
-    std::map<std::pair<int, int>, VertexInfo> vertex_map;
-    build_vertex_map(locations, ontour, offtour, distance, vertex_map);
-    std::cout << "Build points info done" << std::endl;
+        // 计算距离
+        std::vector<std::vector<double>> distance;
+        compute_distances(locations, distance);
+        std::cout << "Compute distance matrix." << std::endl;
 
-    // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
-    GreedyLocalSearch greedy_searcher =
-        greedy_local_search(ontour, offtour, distance, vertex_map, locations);
-    std::cout << "Greedy search done" << std::endl;
+        // 构造初始 on-tour / off-tour 划分：
+        // 对于 TSPLIB 格式的数据集，这里简单地将所有点
+        // 初始视为在路径上，由禁忌搜索自行决定最终保留
+        // 的 on-tour 集合。
+        std::vector<Point> ontour = locations;
+        std::vector<Point> offtour;
 
-    // TODO 创建搜索上下文结构体 searchctx
+        std::cout << "Points in ontour size: " << ontour.size()
+            << std::endl;
+        std::cout << "Points in offtour size: " << offtour.size()
+            << std::endl;
 
-    // 执行禁忌搜索 骨架大概完成 具体逻辑TODO
-    TabuSearch tabu_seracher = tabu_search(
-        locations, greedy_searcher.get_distance(), greedy_searcher.get_ontour(),
-        greedy_searcher.get_offtour(), greedy_searcher.get_vertex_map(),
-        greedy_searcher.get_route(), greedy_searcher.get_cost());
+        // 构建点信息集
+        std::map<std::pair<int, int>, VertexInfo> vertex_map;
+        build_vertex_map(locations, ontour, offtour, distance, vertex_map);
+        std::cout << "Build points info done" << std::endl;
 
-    std::cout << "Tabu search start" << std::endl;
+        // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
+        GreedyLocalSearch greedy_searcher = greedy_local_search(
+            ontour, offtour, distance, vertex_map, locations);
+        std::cout << "Greedy search done" << std::endl;
 
-    tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
-                         TABU_LIST_LENGTH);
+        // 执行禁忌搜索
+        TabuSearch tabu_seracher =
+            tabu_search(locations, greedy_searcher.get_distance(),
+                        greedy_searcher.get_ontour(),
+                        greedy_searcher.get_offtour(),
+                        greedy_searcher.get_vertex_map(),
+                        greedy_searcher.get_route(),
+                        greedy_searcher.get_cost());
 
-    auto len_trend = tabu_seracher.get_len_trend();
-    auto iter_solution = tabu_seracher.get_iter_solution();
-    double best_cost = tabu_seracher.get_best_cost();
-    std::cout << "最优解值为" << best_cost << "\n";
+        std::cout << "Tabu search start" << std::endl;
 
-    // TODO 后续输出启发式最优路线耗时等逻辑
+        tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
+                             TABU_LIST_LENGTH);
+
+        double best_cost = tabu_seracher.get_best_cost();
+        std::cout << "Best cost for " << file << " = " << best_cost
+                  << "\n";
+      } catch (const std::exception &e) {
+        std::cerr << "Error while solving instance " << file << ": "
+                  << e.what() << std::endl;
+      }
+    }
+
   } catch (const std::exception &e) {
     std::cerr << "Error: " << e.what() << std::endl;
     return 1;

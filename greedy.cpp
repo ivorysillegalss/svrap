@@ -54,13 +54,10 @@ nearest_neighbour(const std::vector<Point> &on_vertices,
   std::vector<Point> unvisited = on_vertices;
   std::vector<Point> route;
 
-  // 随机选择初始点
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<size_t> dist(0, unvisited.size() - 1);
-  size_t start_index = dist(gen);
-
-  // 找到第一个点开始
+  // 为了与 TSPLIB / SVRAP 设定更一致，这里固定使用
+  // on_vertices 中的第一个点作为“depot”起点，而不是
+  // 随机选择起点。
+  size_t start_index = 0;
   Point first_vertex = unvisited[start_index];
   // 记录路线
   route.push_back(first_vertex);
@@ -174,15 +171,38 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
   std::swap(*it1, *it2);
 }
 
-// 对应py中的cacl_cost
+// SVRAP 目标函数近似实现：
+//   Z = λ_tour * Σ c_ij x_ij
+//     + λ_alloc * Σ d_ij y_ij
+//     + λ_isol * Σ D_i v_i
+// 其中对于测试问题：
+//   λ_tour = λ_alloc = 1
+//   c_ij = a * l_ij
+//   d_ij = (10 - a) * l_ij
+//   λ_isol = 0.5 + 0.0004 * a^2 * n
+// 这里 a = ALPHA, l_ij 为 TSPLIB 距离。对于给定的 on-tour
+// 顶点集合，最优的分配/隔离决策可以对每个 off-tour 顶点
+// 独立做贪婪选择：
+//   分配成本:   λ_alloc * min_i d_ij
+//   隔离成本:   λ_isol  * D_j
+//   取两者较小者计入目标。
+// 我们用 VertexInfo::isolation_cost 作为 D_j，并通过
+// min( (10-a)*min_i l_ij, λ_isol * D_j ) 实现这一部分。
 double
 GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   if (route.empty()) {
-    // 贪婪搜索有几率报错
     throw std::invalid_argument("nil route, can't calculate");
   }
-  double total_cost = 0.0;
-  for (size_t i = 0; i < route.size() - 1; ++i) {
+
+  const double a = ALPHA; // 论文中的参数 a
+  const double lambda_tour = 1.0;
+  const double lambda_alloc = 1.0;
+  const std::size_t n_vertices = vertex_map_.size();
+  const double lambda_isol = 0.5 + 0.0004 * a * a * static_cast<double>(n_vertices);
+
+  // 1. 路径成本（routing cost）: Σ c_ij x_ij, c_ij = a * l_ij
+  double routing_cost = 0.0;
+  for (size_t i = 0; i + 1 < route.size(); ++i) {
     std::pair<int, int> key1 = {route[i].x, route[i].y};
     std::pair<int, int> key2 = {route[i + 1].x, route[i + 1].y};
     size_t index1, index2;
@@ -195,14 +215,73 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
           std::to_string(key1.second) + ") or (" + std::to_string(key2.first) +
           ", " + std::to_string(key2.second) + ") index");
     }
-    total_cost += distance_[index1][index2];
+    double l_ij = distance_[index1][index2];
+    routing_cost += lambda_tour * a * l_ij;
   }
-  for (const auto &entry : vertex_map_) {
-    if (entry.second.status == "N") {
-      total_cost += 0.5 * entry.second.best_cost;
+
+  // 对应闭合巡回：补上最后一个顶点回到第一个顶点的弧
+  if (route.size() > 1) {
+    std::pair<int, int> key_first = {route.front().x, route.front().y};
+    std::pair<int, int> key_last = {route.back().x, route.back().y};
+    size_t idx_first = vertex_map_.at(key_first).index;
+    size_t idx_last = vertex_map_.at(key_last).index;
+    double l_last_first = distance_[idx_last][idx_first];
+    routing_cost += lambda_tour * a * l_last_first;
+  }
+
+  // 2. 分配 / 隔离成本（对所有不在路径上的点）
+  // 对于每个 status == "N" 的顶点 j：
+  //   allocation_term(j) = λ_alloc * (10-a) * min_i l_ij
+  //   isolation_term(j)  = λ_isol  * D_j
+  //   贡献 = min(allocation_term(j), isolation_term(j))
+  double alloc_iso_cost = 0.0;
+
+  // 预先构造一份当前路径顶点的索引集合，避免在内层循环中频繁查找。
+  std::vector<size_t> route_indices;
+  route_indices.reserve(route.size());
+  for (const auto &p : route) {
+    std::pair<int, int> key = {p.x, p.y};
+    auto it = vertex_map_.find(key);
+    if (it == vertex_map_.end()) {
+      throw std::runtime_error("route point not found in vertex_map");
     }
+    route_indices.push_back(it->second.index);
   }
-  return total_cost;
+
+  for (const auto &entry : vertex_map_) {
+    const auto &info = entry.second;
+    if (info.status == "Y") {
+      continue; // 在路径上的点只计入 routing_cost
+    }
+
+    if (route_indices.empty()) {
+      // 理论上不应发生：路径为空的情况已经在开头排除
+      continue;
+    }
+
+    // 2.1 最近的路径顶点 TSPLIB 距离（l_ij）
+    double best_l = std::numeric_limits<double>::max();
+    for (size_t idx_on : route_indices) {
+      double lij = distance_[info.index][idx_on];
+      if (lij < best_l) {
+        best_l = lij;
+      }
+    }
+
+    double allocation_term = lambda_alloc * (10.0 - a) * best_l;
+    double isolation_term;
+
+    if (info.isolation_cost > 0.0) {
+      isolation_term = lambda_isol * info.isolation_cost;
+    } else {
+      // 如果未设置隔离成本，则等价于“永不选择隔离”
+      isolation_term = std::numeric_limits<double>::max();
+    }
+
+    alloc_iso_cost += std::min(allocation_term, isolation_term);
+  }
+
+  return routing_cost + alloc_iso_cost;
 }
 
 double GreedyLocalSearch::tabu_cacl_cost() {
@@ -218,10 +297,28 @@ void GreedyLocalSearch::update_vertex_map() {
 
   for (const auto &point : locations_) {
     std::pair<int, int> key = {point.x, point.y};
-    if (std::find(ontour_.begin(), ontour_.end(), point) != ontour_.end()) {
-      vertex_map_[key] = VertexInfo(point_to_index[key], "Y");
+    bool on_route =
+        std::find(ontour_.begin(), ontour_.end(), point) != ontour_.end();
+
+    // 保持隔离成本不变（如果之前已经设置过），否则从
+    // 全局 ISOLATION_COSTS 中读取，若仍无则默认 0。
+    double iso_cost = 0.0;
+    auto old_it = vertex_map_.find(key);
+    if (old_it != vertex_map_.end()) {
+      iso_cost = old_it->second.isolation_cost;
     } else {
-      vertex_map_[key] = VertexInfo(point_to_index[key], "N");
+      auto it_iso = ISOLATION_COSTS.find(key);
+      if (it_iso != ISOLATION_COSTS.end()) {
+        iso_cost = it_iso->second;
+      }
+    }
+
+    if (on_route) {
+      vertex_map_[key] =
+          VertexInfo(point_to_index[key], "Y", {0, 0}, 0.0, iso_cost);
+    } else {
+      vertex_map_[key] =
+          VertexInfo(point_to_index[key], "N", {0, 0}, 0.0, iso_cost);
     }
   }
 
@@ -303,46 +400,12 @@ double GreedyLocalSearch::search() {
       }
 
       // 与源代码的更改：避免全量计算
-      // 替换操作
-      // auto vl_index_it = std::find(route_.begin(), route_.end(), vl);
-      //   定位 此处计算与开头的距离 —— 实际索引
-      // size_t vl_index = std::distance(route_.begin(), vl_index_it);
-      // for (size_t i = 0; i < route_.size(); ++i) {
-      //   // 如果当前要交换到的点是它本身 就不用交换
-      //   if (i == vl_index) {
-      //     cost_list.push_back(std::numeric_limits<double>::max());
-      //     routes.push_back(route_);
-      //     dicts.push_back(vertex_map_);
-      //     // 对于当前其他的点都进行交换工作 交换之后计算对应的成本 是否增or减
-      //   } else {
-      //     try {
-      //       std::vector<Point> new_route = route_;
-      //       std::swap(new_route[vl_index], new_route[i]);
-      //       double cost = calculate_route_cost(new_route);
-      //       cost_list.push_back(cost);
-      //       routes.push_back(new_route);
-      //       // 交换操作不需要修改对应的点集
-      //       dicts.push_back(vertex_map_);
-      //     } catch (const std::exception &e) {
-      //       std::cerr << "twoopt operation unknown error: " << e.what()
-      //                 << std::endl;
-      //       // 恢复现场
-      //       cost_list.push_back(std::numeric_limits<double>::max());
-      //       routes.push_back(route_);
-      //       dicts.push_back(vertex_map_);
-      //     }
-      //   }
-      // }
-
       // 替换操作 (Swap / Two-Opt)
-      // 1. 预先计算当前路外点的总惩罚 (Swap 操作不会改变路外点状态，这是个定值)
-      double current_off_penalty = 0.0;
-      for (const auto &entry : vertex_map_) {
-        if (entry.second.status == "N") {
-          current_off_penalty += 0.5 * entry.second.best_cost;
-        }
-      }
-
+      // 在 TS-SVRAP 目标下，路外点的分配/隔离惩罚依赖于
+      // "在路径上的顶点集合"，而不是路径顺序。因此对于
+      // 简单的交换操作，理论上可以预先计算这一部分。但
+      // 为了保持与成本函数实现的一致性，这里直接调用
+      // calculate_route_cost 进行完整评估，避免重复实现。
       auto vl_index_it = std::find(route_.begin(), route_.end(), vl);
       size_t vl_index = std::distance(route_.begin(), vl_index_it);
 
@@ -354,33 +417,11 @@ double GreedyLocalSearch::search() {
           dicts.push_back(vertex_map_);
         } else {
           try {
-            // 构造新路径
             std::vector<Point> new_route = route_;
             std::swap(new_route[vl_index], new_route[i]);
-
-            // 2. 仅计算路径内的几何距离 (Geometry Distance)
-            double route_geo_cost = 0.0;
-            // 遍历新路径计算距离
-            for (size_t k = 0; k < new_route.size() - 1; ++k) {
-              std::pair<int, int> p1_key = {new_route[k].x, new_route[k].y};
-              std::pair<int, int> p2_key = {new_route[k + 1].x,
-                                            new_route[k + 1].y};
-
-              // 获取 distance 矩阵需要的下标索引
-              size_t idx1 = vertex_map_.at(p1_key).index;
-              size_t idx2 = vertex_map_.at(p2_key).index;
-
-              route_geo_cost += distance_[idx1][idx2];
-            }
-
-            // 3. 总花费 = 几何距离 + 路外点惩罚
-            double total_cost = route_geo_cost + current_off_penalty;
-
+            double total_cost = calculate_route_cost(new_route);
             cost_list.push_back(total_cost);
             routes.push_back(new_route);
-
-            // Swap 操作不改变点的 "Y/N" 状态，直接压入当前的 map 即可
-            // (避免了耗时的 map 拷贝)
             dicts.push_back(vertex_map_);
 
           } catch (const std::exception &e) {

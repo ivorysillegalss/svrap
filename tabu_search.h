@@ -63,30 +63,37 @@ private:
   std::vector<Point> iter_solution_;
   std::double_t best_cost_;
 
+  // 当前已知的全局最优解（Champion）及其前一个 Champion
+  std::vector<Point> champion_solution_;
+  std::map<std::pair<int, int>, VertexInfo> champion_vertex_map_;
+  double champion_cost_;
+  std::vector<Point> prev_champion_solution_;
+
+  // Champion 频率信息：在所有 Champion 解中，顶点处于 on/off 状态的计数
+  std::map<std::pair<int, int>, int> champion_on_count_;
+  std::map<std::pair<int, int>, int> champion_off_count_;
+  int champion_sample_count_ = 0;
+
   // 多样化方法
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
-  diversication(const std::vector<std::vector<Point>> &solution_set,
-                std::map<std::pair<int, int>, VertexInfo> iter_dic, int number);
+  diversication(const std::vector<Point> &champion_route,
+                std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                std::vector<OpKey> &diversification_moves);
 
   std::tuple<std::vector<Point>, double>
-  path_relinking(const std::vector<std::vector<Point>> &solution_set,
-                 std::map<std::pair<int, int>, VertexInfo> iter_dic);
+  path_relinking(const std::vector<Point> &prev_champion,
+                 const std::vector<Point> &new_champion,
+                 std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                 std::vector<OpKey> &relink_moves);
 
-  // TODO 返回值类型优雅设置为类 对应原py代码中
-  // operation_style_all =
-  // [route,dic,newroute_cost,[twooptvertice[0],twooptvertice[1]]]的返回结构
-  // (这里第四项有可能是string 也有可能是两个point)
-  // using OperationDesc =
-  //     std::variant<std::monostate,          // 没操作（备用）
-  //                  std::vector<std::string>,             // 比如 "取(3,4)",
-  //                  "删(5,6)" std::vector<Point>       // 或者你喜欢
-  //                  vector<Point>{p1, p2}
-  //                  >;
-  // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
-  std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
-             double, std::vector<Point>>
-  operation_style(const std::vector<Point> &iter_sol,
-                  const std::map<std::pair<int, int>, VertexInfo> &iter_dic);
+  // 根据给定的 Champion 解，更新 m_on(i)、m_off(i) 频率统计
+  void update_champion_frequencies(const std::vector<Point> &champion_route);
+
+    // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
+    std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
+         double, std::vector<Point>>
+    operation_style(const std::vector<Point> &iter_sol,
+            const std::map<std::pair<int, int>, VertexInfo> &iter_dic);
 };
 
 #endif
