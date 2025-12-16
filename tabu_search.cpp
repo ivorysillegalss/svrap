@@ -179,6 +179,7 @@ TabuSearch ::operation_style(
     auto drop_dic = iter_dic;
     auto drop_route = route;
 
+    
     // 随机删除一个位置上的顶点
     int drop_index =
         std::uniform_int_distribution<int>(0,
