@@ -21,6 +21,7 @@
 *.so
 *.out
 *.exe
+*.pth
 
 # Ignore CMake/Make aux files
 /CMakeLists.txt.user
@@ -37,6 +38,7 @@
 # Ignore local data / large coordinate sets 
 /tsp数据坐标集.txt
 /formatted_dataset/
+/models/
 /raw_dataset/
 
 # Python cache
