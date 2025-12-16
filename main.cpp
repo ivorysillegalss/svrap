@@ -1,6 +1,7 @@
 #include "greedy.h"
 #include "input.h"
 #include "tabu_search.h"
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -253,10 +254,14 @@ int main(int argc, char **argv) {
 
         std::cout << "Tabu search start" << std::endl;
 
+        auto start_time = std::chrono::high_resolution_clock::now();
         tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
                              TABU_LIST_LENGTH);
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end_time - start_time;
 
         double best_cost = tabu_seracher.get_best_cost();
+        std::cout << "Tabu search finished in " << elapsed.count() << "s" << std::endl;
         std::cout << "Best cost for " << file << " = " << best_cost
                   << "\n";
       } catch (const std::exception &e) {
