@@ -96,7 +96,8 @@ private:
     std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
          double, std::vector<Point>>
     operation_style(const std::vector<Point> &iter_sol,
-            const std::map<std::pair<int, int>, VertexInfo> &iter_dic);
+            const std::map<std::pair<int, int>, VertexInfo> &iter_dic,
+            double base_allocation_cost);
 };
 
 #endif

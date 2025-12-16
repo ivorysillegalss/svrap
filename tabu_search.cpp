@@ -101,7 +101,8 @@ std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
            double, std::vector<Point>>
 TabuSearch ::operation_style(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &iter_dic) {
+    const std::map<std::pair<int, int>, VertexInfo> &iter_dic,
+    double base_allocation_cost) {
 
   // 三个操作中随机选择一个
   std::array<int, 3> choices = {ADD, DROP, TWOOPT};
@@ -152,6 +153,11 @@ TabuSearch ::operation_style(
       }
     }
 
+    // Optimization: Calculate allocation cost ONCE for this set of points
+    std::vector<Point> alloc_route = route;
+    alloc_route.push_back(add_vertice);
+    double new_allocation_cost = GreedyLocalSearch::compute_allocation_cost(alloc_route, add_dic, distance_);
+
     // 寻找该点在当前路径中的最佳插入位置
     std::vector<Point> best_route;
     double min_cost = std::numeric_limits<double>::max();
@@ -160,9 +166,10 @@ TabuSearch ::operation_style(
       std::vector<Point> temp_route = route;
       temp_route.insert(temp_route.begin() + i, add_vertice);
 
-      // GreedyLocalSearch cal(temp_route, add_dic, distance_);
-      // double c = cal.tabu_cacl_cost();
-      double c = GreedyLocalSearch::compute_cost(temp_route, add_dic, distance_);
+      // Only recompute routing cost
+      double routing_cost = GreedyLocalSearch::compute_routing_cost(temp_route, add_dic, distance_);
+      double c = routing_cost + new_allocation_cost;
+
       if (c < min_cost) {
         min_cost = c;
         best_route = temp_route;
@@ -212,9 +219,9 @@ TabuSearch ::operation_style(
     std::vector<Point> new_route = route;
     std::swap(new_route[idx[0]], new_route[idx[1]]);
 
-    // GreedyLocalSearch calculator(new_route, iter_dic, distance_);
-    // double new_cost = calculator.tabu_cacl_cost();
-    double new_cost = GreedyLocalSearch::compute_cost(new_route, iter_dic, distance_);
+    // Optimization: Allocation cost is unchanged!
+    double routing_cost = GreedyLocalSearch::compute_routing_cost(new_route, iter_dic, distance_);
+    double new_cost = routing_cost + base_allocation_cost;
 
     std::vector<Point> operated = {route[idx[0]], route[idx[1]]};
     return {new_route, iter_dic, new_cost, operated};
@@ -231,13 +238,19 @@ best_insert_position(const Point &p, const std::vector<Point> &route,
   std::vector<Point> best_route = route;
   double best_cost = std::numeric_limits<double>::max();
 
+  // Optimization: Allocation cost is constant for all insertion positions
+  std::vector<Point> alloc_route = route;
+  alloc_route.push_back(p);
+  double allocation_cost = GreedyLocalSearch::compute_allocation_cost(alloc_route, dic, distance);
+
   // 简单的插入逻辑，为了性能不全量 Recalculate，但为了准确这里还是调 Greedy
   for (size_t i = 0; i <= route.size(); ++i) {
     auto test_route = route;
     test_route.insert(test_route.begin() + i, p);
-    // GreedyLocalSearch calc(test_route, dic, distance);
-    // double cost = calc.tabu_cacl_cost();
-    double cost = GreedyLocalSearch::compute_cost(test_route, dic, distance);
+    
+    double routing_cost = GreedyLocalSearch::compute_routing_cost(test_route, dic, distance);
+    double cost = routing_cost + allocation_cost;
+
     if (cost < best_cost) {
       best_cost = cost;
       best_route = test_route;
@@ -527,11 +540,15 @@ void TabuSearch::search(int T, int Q, int TBL) {
   int iter_count = 0;
 
   // 计算当前解的成本，用于判断“改进”或“非改进”移动
-  GreedyLocalSearch init_calc(current_sol, current_dic, distance_);
-  double current_cost = init_calc.tabu_cacl_cost();
+  // GreedyLocalSearch init_calc(current_sol, current_dic, distance_);
+  // double current_cost = init_calc.tabu_cacl_cost();
+  double current_cost = GreedyLocalSearch::compute_cost(current_sol, current_dic, distance_);
 
   while (iter_count < MAX_TOTAL_ITER) {
     iter_count++;
+
+    // Calculate allocation cost for current solution to pass to operation_style
+    double current_allocation_cost = GreedyLocalSearch::compute_allocation_cost(current_sol, current_dic, distance_);
 
     // Calculate lambda(t)
     double progress = static_cast<double>(iter_count) / MAX_TOTAL_ITER;
@@ -550,7 +567,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
     while (valid_neighbors < MAX_NEIGHBORS && attempts < 200) {
       attempts++;
       auto [n_route, n_dic, n_cost, n_op] =
-          operation_style(current_sol, current_dic);
+          operation_style(current_sol, current_dic, current_allocation_cost);
 
       if (n_op.empty() ||
           n_cost == std::numeric_limits<double>::max())

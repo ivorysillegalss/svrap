@@ -188,22 +188,16 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
 //   取两者较小者计入目标。
 // 我们用 VertexInfo::isolation_cost 作为 D_j，并通过
 // min( (10-a)*min_i l_ij, λ_isol * D_j ) 实现这一部分。
-double GreedyLocalSearch::compute_cost(
+double GreedyLocalSearch::compute_routing_cost(
     const std::vector<Point> &route,
     const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
     const std::vector<std::vector<double>> &distance) {
-  if (route.empty()) {
-    throw std::invalid_argument("nil route, can't calculate");
-  }
+  if (route.empty()) return 0.0;
 
-  const double a = ALPHA; // 论文中的参数 a
+  const double a = ALPHA;
   const double lambda_tour = 1.0;
-  const double lambda_alloc = 1.0;
-  const std::size_t n_vertices = vertex_map.size();
-  const double lambda_isol = 0.5 + 0.0004 * a * a * static_cast<double>(n_vertices);
-
-  // 1. 路径成本（routing cost）: Σ c_ij x_ij, c_ij = a * l_ij
   double routing_cost = 0.0;
+
   for (size_t i = 0; i + 1 < route.size(); ++i) {
     std::pair<int, int> key1 = {route[i].x, route[i].y};
     std::pair<int, int> key2 = {route[i + 1].x, route[i + 1].y};
@@ -211,79 +205,69 @@ double GreedyLocalSearch::compute_cost(
     try {
       index1 = vertex_map.at(key1).index;
       index2 = vertex_map.at(key2).index;
-    } catch (const std::out_of_range &e) {
-      throw std::runtime_error(
-          "can't find point (" + std::to_string(key1.first) + ", " +
-          std::to_string(key1.second) + ") or (" + std::to_string(key2.first) +
-          ", " + std::to_string(key2.second) + ") index");
+    } catch (...) {
+      continue;
     }
-    double l_ij = distance[index1][index2];
-    routing_cost += lambda_tour * a * l_ij;
+    routing_cost += lambda_tour * a * distance[index1][index2];
   }
 
-  // 对应闭合巡回：补上最后一个顶点回到第一个顶点的弧
   if (route.size() > 1) {
     std::pair<int, int> key_first = {route.front().x, route.front().y};
     std::pair<int, int> key_last = {route.back().x, route.back().y};
     size_t idx_first = vertex_map.at(key_first).index;
     size_t idx_last = vertex_map.at(key_last).index;
-    double l_last_first = distance[idx_last][idx_first];
-    routing_cost += lambda_tour * a * l_last_first;
+    routing_cost += lambda_tour * a * distance[idx_last][idx_first];
   }
+  return routing_cost;
+}
 
-  // 2. 分配 / 隔离成本（对所有不在路径上的点）
-  // 对于每个 status == "N" 的顶点 j：
-  //   allocation_term(j) = λ_alloc * (10-a) * min_i l_ij
-  //   isolation_term(j)  = λ_isol  * D_j
-  //   贡献 = min(allocation_term(j), isolation_term(j))
+double GreedyLocalSearch::compute_allocation_cost(
+    const std::vector<Point> &route,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<std::vector<double>> &distance) {
+  if (route.empty()) return std::numeric_limits<double>::max();
+
+  const double a = ALPHA;
+  const double lambda_alloc = 1.0;
+  const std::size_t n_vertices = vertex_map.size();
+  const double lambda_isol = 0.5 + 0.0004 * a * a * static_cast<double>(n_vertices);
   double alloc_iso_cost = 0.0;
 
-  // 预先构造一份当前路径顶点的索引集合，避免在内层循环中频繁查找。
   std::vector<size_t> route_indices;
   route_indices.reserve(route.size());
   for (const auto &p : route) {
     std::pair<int, int> key = {p.x, p.y};
     auto it = vertex_map.find(key);
-    if (it == vertex_map.end()) {
-      throw std::runtime_error("route point not found in vertex_map");
+    if (it != vertex_map.end()) {
+      route_indices.push_back(it->second.index);
     }
-    route_indices.push_back(it->second.index);
   }
 
   for (const auto &entry : vertex_map) {
     const auto &info = entry.second;
-    if (info.status == "Y") {
-      continue; // 在路径上的点只计入 routing_cost
-    }
+    if (info.status == "Y") continue;
 
-    if (route_indices.empty()) {
-      // 理论上不应发生：路径为空的情况已经在开头排除
-      continue;
-    }
-
-    // 2.1 最近的路径顶点 TSPLIB 距离（l_ij）
     double best_l = std::numeric_limits<double>::max();
     for (size_t idx_on : route_indices) {
       double lij = distance[info.index][idx_on];
-      if (lij < best_l) {
-        best_l = lij;
-      }
+      if (lij < best_l) best_l = lij;
     }
 
     double allocation_term = lambda_alloc * (10.0 - a) * best_l;
-    double isolation_term;
-
-    if (info.isolation_cost > 0.0) {
-      isolation_term = lambda_isol * info.isolation_cost;
-    } else {
-      // 如果未设置隔离成本，则等价于“永不选择隔离”
-      isolation_term = std::numeric_limits<double>::max();
-    }
+    double isolation_term = (info.isolation_cost > 0.0) ? 
+        lambda_isol * info.isolation_cost : std::numeric_limits<double>::max();
 
     alloc_iso_cost += std::min(allocation_term, isolation_term);
   }
+  return alloc_iso_cost;
+}
 
-  return routing_cost + alloc_iso_cost;
+double GreedyLocalSearch::compute_cost(
+    const std::vector<Point> &route,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<std::vector<double>> &distance) {
+  return compute_routing_cost(route, vertex_map, distance) + 
+         compute_allocation_cost(route, vertex_map, distance);
 }
 
 double

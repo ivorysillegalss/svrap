@@ -36,6 +36,16 @@ public:
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<std::vector<double>> &distance);
 
+  static double compute_routing_cost(
+      const std::vector<Point> &route,
+      const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+      const std::vector<std::vector<double>> &distance);
+
+  static double compute_allocation_cost(
+      const std::vector<Point> &route,
+      const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+      const std::vector<std::vector<double>> &distance);
+
   double search();
   double tabu_cacl_cost();
   const std::vector<Point> &get_route() const { return route_; }
