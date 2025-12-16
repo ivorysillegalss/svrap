@@ -1,6 +1,7 @@
 #include "greedy.h"
 #include "input.h"
 #include "tabu_search.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <exception>
@@ -65,7 +66,7 @@ int main(int argc, char **argv) {
         ALPHA = std::atof(argv[1]);
         std::cout << "Using ALPHA = " << ALPHA << std::endl;
       } catch (...) {
-        std::cerr << "Warning: failed to parse ALPHA from argv[1], keep default "
+        std::cout << "Warning: failed to parse ALPHA from argv[1], keep default "
                   << ALPHA << std::endl;
       }
     } else {
@@ -126,11 +127,71 @@ int main(int argc, char **argv) {
         std::cout << "Compute distance matrix." << std::endl;
 
         // 构造初始 on-tour / off-tour 划分：
-        // 对于 TSPLIB 格式的数据集，这里简单地将所有点
-        // 初始视为在路径上，由禁忌搜索自行决定最终保留
-        // 的 on-tour 集合。
-        std::vector<Point> ontour = locations;
+        std::vector<Point> ontour;
         std::vector<Point> offtour;
+
+        // 尝试读取 Python 生成的 attention_probs.csv
+        std::vector<PointProb> probs;
+        read_attention_probs("attention_probs.csv", probs);
+
+        bool used_python_backbone = false;
+        // 简单的校验：如果 probs 数据量足够且能匹配到当前 locations
+        if (!probs.empty()) {
+          // 按 p_route 降序排序
+          std::sort(probs.begin(), probs.end(),
+                    [](const PointProb &a, const PointProb &b) {
+                      return a.p_route > b.p_route;
+                    });
+
+          // 选取 Top K (20%)
+          size_t K = std::max((size_t)2, (size_t)(locations.size() * 0.2));
+          std::vector<Point> backbone;
+
+          // 提取骨干
+          for (const auto &pp : probs) {
+            if (backbone.size() >= K)
+              break;
+            Point p(pp.x, pp.y);
+            // 确认该点确实在当前 locations 中
+            bool found = false;
+            for (const auto &loc : locations) {
+              if (loc.x == p.x && loc.y == p.y) {
+                found = true;
+                break;
+              }
+            }
+            if (found) {
+              backbone.push_back(p);
+            }
+          }
+
+          // 如果成功提取到骨干
+          if (backbone.size() >= 2) {
+            used_python_backbone = true;
+            ontour = backbone;
+            // 其余点放入 offtour
+            for (const auto &loc : locations) {
+              bool is_backbone = false;
+              for (const auto &b : backbone) {
+                if (b.x == loc.x && b.y == loc.y) {
+                  is_backbone = true;
+                  break;
+                }
+              }
+              if (!is_backbone) {
+                offtour.push_back(loc);
+              }
+            }
+            std::cout << "Initialized with Python backbone (size "
+                      << ontour.size() << ")" << std::endl;
+          }
+        }
+
+        if (!used_python_backbone) {
+          // 默认：所有点都在路径上
+          ontour = locations;
+          // offtour 为空
+        }
 
         std::cout << "Points in ontour size: " << ontour.size()
             << std::endl;

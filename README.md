@@ -1,41 +1,114 @@
 # svrap
 
-基于 TS-SVRAP 论文的 **贪婪 + 禁忌搜索 (Tabu Search)** 实现，包含路径重链接 (Path Relinking) 和多样化 (Diversification)，用于在 TSPLIB 坐标数据上求解单车路径分配问题 (SVRAP)。
+基于 TS-SVRAP 论文的 **混合求解器** 实现。结合了 **深度强化学习 (Deep RL)** 策略网络生成初始解，以及 **禁忌搜索 (Tabu Search)** 进行后续优化。
 
 核心部分：
 
-- C++17 实现：`main.cpp`, `greedy.cpp`, `tabu_search.cpp`, `input.cpp`
-- 运行控制参数：权重参数 `ALPHA` (= 论文中的 \(a\))
-- 数据集：`formatted_dataset/*.txt`（TSPLIB 格式坐标）
-- Python 单线程批跑脚本：`run_experiments.py`
+- **Python 策略网络** (`svrap_solver.py`): 使用 PyTorch 实现的 Attention 模型，通过 REINFORCE 算法训练，为每个节点预测成为骨干路径点（Backbone）的概率。
+- **C++ 禁忌搜索** (`main.cpp`, `tabu_search.cpp`): 读取 Python 生成的概率分布构建初始解，并执行带有路径重链接 (Path Relinking) 和多样化 (Diversification) 的禁忌搜索。
+- **自动化脚本** (`run_experiments.ps1`): PowerShell 脚本，用于批量执行 "Python 推理 -> C++ 搜索" 的完整流程。
 
-构建和运行均依赖于 `Makefile` 或直接调用编译好的 `svrap.exe`。
+---
+
+## 环境依赖
+
+1.  **C++**: 支持 C++17 的编译器 (如 g++ 8.1.0+).
+2.  **Python**: Python 3.8+, 需安装 `torch` (建议支持 CUDA).
+3.  **PowerShell**: 用于运行批处理脚本.
 
 ---
 
 ## 构建
 
-使用 `Makefile`（推荐）：
+使用 `g++` 编译 C++ 求解器：
 
 ```bash
-make build
-```
-
-或直接：
-
-```bash
-make          # 默认目标：编译生成 svrap.exe
-```
-
-如需手动编译（示例）：
-
-```bash
-
+g++ -std=c++17 -O2 -o svrap.exe main.cpp input.cpp greedy.cpp tabu_search.cpp
 ```
 
 ---
 
-## 单实例运行
+## 运行流程
+
+本项目采用 **Python + C++** 的混合流水线模式。
+
+### 1. 自动化批处理 (推荐)
+
+使用 PowerShell 脚本一键运行所有实验。该脚本会自动遍历 `formatted_dataset` 目录下的所有数据集，依次执行 Python 网络推理和 C++ 搜索，并将结果记录到日志中。
+
+```powershell
+./run_experiments.ps1
+```
+
+**输出:**
+- `experiment_results.log`: 包含每个数据集的训练/推理日志以及 C++ 求解的最终 Best Cost。
+- `models/`: 存放训练好的 PyTorch 模型 (`.pth`)。
+
+### 2. 单实例手动运行
+
+如果需要调试单个数据集，可以分两步执行：
+
+**步骤 1: 运行 Python 策略网络**
+加载数据集，训练模型（或加载已有模型），并输出节点概率到 `attention_probs.csv`。
+
+```bash
+# 语法: python svrap_solver.py --dataset <路径> [--train]
+python svrap_solver.py --dataset formatted_dataset/berlin52.txt --train
+```
+*   `--train`: 强制重新训练模型。如果不加且模型存在，则直接加载模型进行推理。
+*   **产物**: 生成 `attention_probs.csv` 和 `backbone_indices.txt`。
+
+**步骤 2: 运行 C++ 求解器**
+读取数据集和步骤 1 生成的 `attention_probs.csv`，进行禁忌搜索。
+
+```bash
+# 语法: ./svrap.exe <ALPHA> <路径>
+./svrap.exe 7 formatted_dataset/berlin52.txt
+```
+*   `ALPHA`: 权重参数 (通常为 3, 5, 7, 9)。
+*   **产物**: 在终端输出最终的 Best Cost。
+
+---
+
+## 项目结构
+
+```text
+.
+├── formatted_dataset/      # 数据集文件 (.txt)
+├── models/                 # 保存的 PyTorch 模型 (.pth)
+├── svrap_solver.py         # Python 策略网络源码
+├── svrap.exe               # 编译后的 C++ 求解器
+├── run_experiments.ps1     # 批处理实验脚本
+├── attention_probs.csv     # [中间文件] Python 输出的节点概率
+├── experiment_results.log  # [结果] 实验运行日志
+├── main.cpp                # C++ 入口
+├── tabu_search.cpp         # C++ 禁忌搜索实现
+└── ...
+```
+
+---
+
+## 算法原理简述
+
+1.  **策略网络 (Python)**:
+    - 输入：节点坐标。
+    - 模型：基于 Attention 的 Encoder-Decoder 结构。
+    - 输出：每个节点属于 Backbone (路径) 的概率。
+    - 训练：REINFORCE 算法，以 SVRAP 成本为奖励信号。
+
+2.  **混合初始化**:
+    - C++ 读取 `attention_probs.csv`。
+    - 根据 `p_route` (路径概率) 贪婪地选择高概率节点构建初始 Backbone。
+
+3.  **禁忌搜索 (C++)**:
+    - 在初始解的基础上进行 `ADD`, `DROP`, `TWO-OPT` 邻域搜索。
+    - 包含 Path Relinking (路径重连) 和 Diversification (多样化) 机制跳出局部最优。
+
+---
+
+## 旧版说明 (仅供参考)
+
+### 单实例运行 (纯 C++ 模式)
 
 程序入口在 `main.cpp`，命令行格式：
 

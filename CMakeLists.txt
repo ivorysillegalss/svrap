@@ -12,18 +12,13 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2 -w")
 # 自动收集当前目录所有 .cpp
 file(GLOB SOURCES "*.cpp")
 
-set(DATA_FILES 
-    "tsp数据坐标集.txt"      # ← 改成你的真实文件名
-)
-
-foreach(file ${DATA_FILES})
-    if(EXISTS "${CMAKE_SOURCE_DIR}/${file}")
-        configure_file("${CMAKE_SOURCE_DIR}/${file}" "${CMAKE_BINARY_DIR}/${file}" COPYONLY)
-        message(STATUS "Copy data file: ${file}")
-    else()
-        message(WARNING "Data file not found: ${file}")
-    endif()
-endforeach()
+# Copy the entire formatted_dataset directory to the build folder
+if(EXISTS "${CMAKE_SOURCE_DIR}/formatted_dataset")
+    file(COPY "${CMAKE_SOURCE_DIR}/formatted_dataset" DESTINATION "${CMAKE_BINARY_DIR}")
+    message(STATUS "Copied formatted_dataset to build directory")
+else()
+    message(WARNING "formatted_dataset directory not found")
+endif()
 
 # 生成可执行文件叫 app
 add_executable(app ${SOURCES})

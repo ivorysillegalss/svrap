@@ -46,6 +46,14 @@ struct Point {
   }
 };
 
+struct PointProb {
+  int x;
+  int y;
+  double p_assign;
+  double p_route;
+  double p_loss;
+};
+
 // 定义 VertexInfo 结构体（如果需要 vertex_map）
 struct VertexInfo {
   size_t index;       // 唯一标识顶点 节点映射中进行快速查找
@@ -81,6 +89,10 @@ void read_coordinates(const std::string &filename,
 // 不存在或某个点没有记录，则该点的 isolation_cost 默认
 // 为 0，由 allocation_cost 主导。
 void read_isolation_costs(const std::string &filename);
+
+void read_attention_probs(const std::string &filename,
+                          std::vector<PointProb> &probs);
+
 void compute_distances(const std::vector<Point> &locations,
                        std::vector<std::vector<double>> &distance);
 void classify_points(const std::vector<Point> &locations,

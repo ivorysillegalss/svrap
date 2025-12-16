@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 // 默认 alpha 值，可以在 main 中按需修改（3,5,7,9 等）。
 double ALPHA = 7.0;
@@ -34,6 +35,8 @@ void read_coordinates(const std::string &filename,
   // 依次读取文件每行内容
   std::string line;
   int line_number = 0;
+  std::set<std::pair<int, int>> seen_coords;
+
   while (std::getline(file, line)) {
     ++line_number;
     std::stringstream ss(line);
@@ -41,19 +44,30 @@ void read_coordinates(const std::string &filename,
 
     // spilt & 格式化读取内容
     if (!std::getline(ss, x_str, ',') || !std::getline(ss, y_str)) {
-      std::cerr << "Warning : Invalid format at line" << line_number << ": "
+      std::cout << "Warning : Invalid format at line" << line_number << ": "
                 << line << std::endl;
       continue;
     }
 
     // 转换数据格式
     try {
+      double x_d = std::stod(x_str);
+      double y_d = std::stod(y_str);
+      int x = static_cast<int>(x_d);
+      int y = static_cast<int>(y_d);
+
+      // Handle duplicates by perturbing coordinates
+      while (seen_coords.count({x, y})) {
+        y++; // Simple perturbation strategy
+      }
+      seen_coords.insert({x, y});
+
       Point p;
-      p.x = std::stoi(x_str);
-      p.y = std::stoi(y_str);
+      p.x = x;
+      p.y = y;
       locations.push_back(p);
     } catch (const std::exception &e) {
-      std::cerr << "Warning: Invalid number format at line" << line_number
+      std::cout << "Warning: Invalid number format at line" << line_number
                 << ": " << line << std::endl;
       continue;
     }
@@ -71,7 +85,7 @@ void read_isolation_costs(const std::string &filename) {
   std::ifstream file(filename);
   if (!file.is_open()) {
     // 如果文件不存在，不视为致命错误，允许默认 isolation_cost=0
-    std::cerr << "Warning: failed to open isolation cost file: " << filename
+    std::cout << "Warning: failed to open isolation cost file: " << filename
               << " (all isolation_cost will default to 0)" << std::endl;
     return;
   }
@@ -88,7 +102,7 @@ void read_isolation_costs(const std::string &filename) {
 
     if (!std::getline(ss, x_str, ',') || !std::getline(ss, y_str, ',') ||
         !std::getline(ss, iso_str)) {
-      std::cerr << "Warning: invalid isolation line at " << line_number
+      std::cout << "Warning: invalid isolation line at " << line_number
                 << ": " << line << std::endl;
       continue;
     }
@@ -99,8 +113,45 @@ void read_isolation_costs(const std::string &filename) {
       double iso = std::stod(iso_str);
       ISOLATION_COSTS[{x, y}] = iso;
     } catch (const std::exception &e) {
-      std::cerr << "Warning: invalid isolation number format at line "
+      std::cout << "Warning: invalid isolation number format at line "
                 << line_number << ": " << line << std::endl;
+      continue;
+    }
+  }
+}
+
+void read_attention_probs(const std::string &filename,
+                          std::vector<PointProb> &probs) {
+  probs.clear();
+  std::ifstream file(filename);
+  if (!file.is_open()) {
+    std::cout << "Warning: failed to open attention probs file: " << filename
+              << std::endl;
+    return;
+  }
+
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty())
+      continue;
+    std::stringstream ss(line);
+    std::string x_str, y_str, pa_str, pr_str, pl_str;
+
+    if (!std::getline(ss, x_str, ',') || !std::getline(ss, y_str, ',') ||
+        !std::getline(ss, pa_str, ',') || !std::getline(ss, pr_str, ',') ||
+        !std::getline(ss, pl_str, ',')) {
+      continue;
+    }
+
+    try {
+      PointProb pp;
+      pp.x = std::stoi(x_str);
+      pp.y = std::stoi(y_str);
+      pp.p_assign = std::stod(pa_str);
+      pp.p_route = std::stod(pr_str);
+      pp.p_loss = std::stod(pl_str);
+      probs.push_back(pp);
+    } catch (...) {
       continue;
     }
   }
