@@ -92,6 +92,10 @@ private:
   // 熵退火参数
   double lambda_0_ = 1.0;
 
+  // Precomputed K-nearest neighbors for each point (by index)
+  std::vector<std::vector<int>> nearby_table_;
+  const int K_NEIGHBORS = 20;
+
     // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
     std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
          double, std::vector<Point>>

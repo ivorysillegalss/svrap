@@ -96,6 +96,26 @@ TabuSearch::TabuSearch(
   cost_trend_.push_back(cost);
   // 初始解视为第一个 Champion，初始化频率统计
   update_champion_frequencies(champion_solution_);
+
+  // Initialize nearby_table_
+  size_t n = locations_.size();
+  nearby_table_.resize(n);
+  for (size_t i = 0; i < n; ++i) {
+    std::vector<std::pair<double, int>> dists;
+    dists.reserve(n);
+    for (size_t j = 0; j < n; ++j) {
+      if (i == j) continue;
+      dists.push_back({distance_[i][j], static_cast<int>(j)});
+    }
+    // Sort by distance
+    std::sort(dists.begin(), dists.end());
+    
+    // Keep top K
+    int k = std::min((int)dists.size(), K_NEIGHBORS);
+    for (int j = 0; j < k; ++j) {
+      nearby_table_[i].push_back(dists[j].second);
+    }
+  }
 }
 std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
            double, std::vector<Point>>
@@ -162,7 +182,68 @@ TabuSearch ::operation_style(
     std::vector<Point> best_route;
     double min_cost = std::numeric_limits<double>::max();
 
-    for (size_t i = 0; i <= route.size(); ++i) {
+    // K-NN Optimization: Only check insertion positions adjacent to neighbors
+    // First, identify which indices in the current route are neighbors of add_vertice
+    std::vector<size_t> candidate_indices;
+    const auto& neighbors = nearby_table_[add_idx];
+    
+    // Build a quick lookup for route indices? Or just iterate route.
+    // Since K is small (20), and route size is N, iterating route and checking if it's a neighbor is O(N*K) or O(N) with hash set.
+    // But iterating neighbors and finding them in route is O(K*N) with linear scan.
+    // Let's just iterate the route once.
+    
+    // Optimization: We need to check insertion at i (before route[i]) and i+1 (after route[i]).
+    // If route[i] is a neighbor, we should check insertion near it.
+    
+    // Fallback: If no neighbors are in the route (rare), we might want to check all?
+    // Or just check all if route is small.
+    
+    bool use_knn = true;
+    if (route.size() < 10) use_knn = false; // For very small routes, just check all
+
+    if (!use_knn) {
+        for (size_t i = 0; i <= route.size(); ++i) {
+            candidate_indices.push_back(i);
+        }
+    } else {
+        // Use a boolean array for fast neighbor check
+        // Since N is small (up to 1000?), a vector<bool> is fast.
+        // But we don't want to allocate vector<bool> every time.
+        // Given K is small, we can just iterate K neighbors for each node in route? No, that's O(N*K).
+        // Better: Iterate neighbors, find their position in route.
+        // But we don't know their position in route without scanning route.
+        // So scanning route is inevitable unless we maintain a map.
+        // Let's scan route. For each node, is it in neighbors?
+        // To make "is it in neighbors" fast, we can sort neighbors or use a set?
+        // Actually, for K=20, linear scan of neighbors is fast enough.
+        
+        std::vector<bool> is_neighbor(locations_.size(), false);
+        for (int neighbor_idx : neighbors) {
+            is_neighbor[neighbor_idx] = true;
+        }
+
+        for (size_t i = 0; i < route.size(); ++i) {
+            size_t u_idx = iter_dic.at({route[i].x, route[i].y}).index;
+            if (is_neighbor[u_idx]) {
+                // If route[i] is a neighbor, check insertion before (i) and after (i+1)
+                candidate_indices.push_back(i);
+                candidate_indices.push_back(i + 1);
+            }
+        }
+        
+        // Remove duplicates and sort
+        std::sort(candidate_indices.begin(), candidate_indices.end());
+        candidate_indices.erase(std::unique(candidate_indices.begin(), candidate_indices.end()), candidate_indices.end());
+        
+        // If candidate_indices is empty (no neighbors in route), fall back to full scan
+        if (candidate_indices.empty()) {
+             for (size_t i = 0; i <= route.size(); ++i) {
+                candidate_indices.push_back(i);
+            }
+        }
+    }
+
+    for (size_t i : candidate_indices) {
       std::vector<Point> temp_route = route;
       temp_route.insert(temp_route.begin() + i, add_vertice);
 
