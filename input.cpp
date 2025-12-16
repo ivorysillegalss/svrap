@@ -216,7 +216,8 @@ void build_vertex_map(const std::vector<Point> &locations,
                       const std::vector<Point> &on_vertices,
                       const std::vector<Point> &off_vertices,
                       const std::vector<std::vector<double>> &distance,
-                      std::map<std::pair<int, int>, VertexInfo> &vertex_map) {
+                      std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+                      const std::set<std::pair<int, int>> &high_entropy_points) {
   vertex_map.clear();
   std::map<std::pair<int, int>, size_t> point_to_index;
 
@@ -248,12 +249,14 @@ void build_vertex_map(const std::vector<Point> &locations,
       iso_cost = it_iso->second;
     }
 
+    bool is_he = high_entropy_points.count(key) > 0;
+
     if (on_route) {
       vertex_map[key] =
-          VertexInfo(point_to_index[key], "Y", {0, 0}, 0.0, iso_cost);
+          VertexInfo(point_to_index[key], "Y", {0, 0}, 0.0, iso_cost, is_he);
     } else {
       vertex_map[key] =
-          VertexInfo(point_to_index[key], "N", {0, 0}, 0.0, iso_cost);
+          VertexInfo(point_to_index[key], "N", {0, 0}, 0.0, iso_cost, is_he);
     }
   }
 }

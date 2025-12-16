@@ -188,8 +188,10 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
 //   取两者较小者计入目标。
 // 我们用 VertexInfo::isolation_cost 作为 D_j，并通过
 // min( (10-a)*min_i l_ij, λ_isol * D_j ) 实现这一部分。
-double
-GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
+double GreedyLocalSearch::compute_cost(
+    const std::vector<Point> &route,
+    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::vector<std::vector<double>> &distance) {
   if (route.empty()) {
     throw std::invalid_argument("nil route, can't calculate");
   }
@@ -197,7 +199,7 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   const double a = ALPHA; // 论文中的参数 a
   const double lambda_tour = 1.0;
   const double lambda_alloc = 1.0;
-  const std::size_t n_vertices = vertex_map_.size();
+  const std::size_t n_vertices = vertex_map.size();
   const double lambda_isol = 0.5 + 0.0004 * a * a * static_cast<double>(n_vertices);
 
   // 1. 路径成本（routing cost）: Σ c_ij x_ij, c_ij = a * l_ij
@@ -207,15 +209,15 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     std::pair<int, int> key2 = {route[i + 1].x, route[i + 1].y};
     size_t index1, index2;
     try {
-      index1 = vertex_map_.at(key1).index;
-      index2 = vertex_map_.at(key2).index;
+      index1 = vertex_map.at(key1).index;
+      index2 = vertex_map.at(key2).index;
     } catch (const std::out_of_range &e) {
       throw std::runtime_error(
           "can't find point (" + std::to_string(key1.first) + ", " +
           std::to_string(key1.second) + ") or (" + std::to_string(key2.first) +
           ", " + std::to_string(key2.second) + ") index");
     }
-    double l_ij = distance_[index1][index2];
+    double l_ij = distance[index1][index2];
     routing_cost += lambda_tour * a * l_ij;
   }
 
@@ -223,9 +225,9 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   if (route.size() > 1) {
     std::pair<int, int> key_first = {route.front().x, route.front().y};
     std::pair<int, int> key_last = {route.back().x, route.back().y};
-    size_t idx_first = vertex_map_.at(key_first).index;
-    size_t idx_last = vertex_map_.at(key_last).index;
-    double l_last_first = distance_[idx_last][idx_first];
+    size_t idx_first = vertex_map.at(key_first).index;
+    size_t idx_last = vertex_map.at(key_last).index;
+    double l_last_first = distance[idx_last][idx_first];
     routing_cost += lambda_tour * a * l_last_first;
   }
 
@@ -241,14 +243,14 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   route_indices.reserve(route.size());
   for (const auto &p : route) {
     std::pair<int, int> key = {p.x, p.y};
-    auto it = vertex_map_.find(key);
-    if (it == vertex_map_.end()) {
+    auto it = vertex_map.find(key);
+    if (it == vertex_map.end()) {
       throw std::runtime_error("route point not found in vertex_map");
     }
     route_indices.push_back(it->second.index);
   }
 
-  for (const auto &entry : vertex_map_) {
+  for (const auto &entry : vertex_map) {
     const auto &info = entry.second;
     if (info.status == "Y") {
       continue; // 在路径上的点只计入 routing_cost
@@ -262,7 +264,7 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
     // 2.1 最近的路径顶点 TSPLIB 距离（l_ij）
     double best_l = std::numeric_limits<double>::max();
     for (size_t idx_on : route_indices) {
-      double lij = distance_[info.index][idx_on];
+      double lij = distance[info.index][idx_on];
       if (lij < best_l) {
         best_l = lij;
       }
@@ -282,6 +284,11 @@ GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
   }
 
   return routing_cost + alloc_iso_cost;
+}
+
+double
+GreedyLocalSearch::calculate_route_cost(std::vector<Point> &route) const {
+  return compute_cost(route, vertex_map_, distance_);
 }
 
 double GreedyLocalSearch::tabu_cacl_cost() {

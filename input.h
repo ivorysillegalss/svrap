@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 // ---------------- SVRAP global parameters ----------------
 // ALPHA (a): parameter controlling the split between routing and
@@ -68,13 +69,14 @@ struct VertexInfo {
   // the caller to initialise it appropriately if isolation is
   // allowed in the instance.
   double isolation_cost;
+  bool is_high_entropy;
 
   // VertexInfo(size_t idx, const std::string &st)
   //     : index(idx), status(st), best_vertex({0, 0}), best_cost(0.0) {}
   VertexInfo(size_t idx = 0, const std::string &st = "", Point bv = {0, 0},
-             double bc = 0.0, double iso = 0.0)
+             double bc = 0.0, double iso = 0.0, bool he = false)
       : index(idx), status(st), best_vertex(bv), best_cost(bc),
-        isolation_cost(iso) {}
+        isolation_cost(iso), is_high_entropy(he) {}
 };
 
 // Optional per-vertex isolation costs (eg. f_i in the paper).
@@ -102,6 +104,7 @@ void build_vertex_map(const std::vector<Point> &locations,
                       const std::vector<Point> &on_vertices,
                       const std::vector<Point> &off_vertices,
                       const std::vector<std::vector<double>> &distance,
-                      std::map<std::pair<int, int>, VertexInfo> &vertex_map);
+                      std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+                      const std::set<std::pair<int, int>> &high_entropy_points);
 
 #endif // TSP_COMMON_H

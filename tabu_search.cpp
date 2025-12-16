@@ -160,8 +160,9 @@ TabuSearch ::operation_style(
       std::vector<Point> temp_route = route;
       temp_route.insert(temp_route.begin() + i, add_vertice);
 
-      GreedyLocalSearch cal(temp_route, add_dic, distance_);
-      double c = cal.tabu_cacl_cost();
+      // GreedyLocalSearch cal(temp_route, add_dic, distance_);
+      // double c = cal.tabu_cacl_cost();
+      double c = GreedyLocalSearch::compute_cost(temp_route, add_dic, distance_);
       if (c < min_cost) {
         min_cost = c;
         best_route = temp_route;
@@ -191,8 +192,9 @@ TabuSearch ::operation_style(
     info.status = "N";
 
     // 其余最近邻信息交由成本函数统一处理
-    GreedyLocalSearch cal(drop_route, drop_dic, distance_);
-    double i_cost = cal.tabu_cacl_cost();
+    // GreedyLocalSearch cal(drop_route, drop_dic, distance_);
+    // double i_cost = cal.tabu_cacl_cost();
+    double i_cost = GreedyLocalSearch::compute_cost(drop_route, drop_dic, distance_);
 
     return {drop_route, drop_dic, i_cost, {d_vertice}};
 
@@ -209,8 +211,9 @@ TabuSearch ::operation_style(
     std::vector<Point> new_route = route;
     std::swap(new_route[idx[0]], new_route[idx[1]]);
 
-    GreedyLocalSearch calculator(new_route, iter_dic, distance_);
-    double new_cost = calculator.tabu_cacl_cost();
+    // GreedyLocalSearch calculator(new_route, iter_dic, distance_);
+    // double new_cost = calculator.tabu_cacl_cost();
+    double new_cost = GreedyLocalSearch::compute_cost(new_route, iter_dic, distance_);
 
     std::vector<Point> operated = {route[idx[0]], route[idx[1]]};
     return {new_route, iter_dic, new_cost, operated};
@@ -231,8 +234,9 @@ best_insert_position(const Point &p, const std::vector<Point> &route,
   for (size_t i = 0; i <= route.size(); ++i) {
     auto test_route = route;
     test_route.insert(test_route.begin() + i, p);
-    GreedyLocalSearch calc(test_route, dic, distance);
-    double cost = calc.tabu_cacl_cost();
+    // GreedyLocalSearch calc(test_route, dic, distance);
+    // double cost = calc.tabu_cacl_cost();
+    double cost = GreedyLocalSearch::compute_cost(test_route, dic, distance);
     if (cost < best_cost) {
       best_cost = cost;
       best_route = test_route;
@@ -274,8 +278,9 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
     }
   }
   if (state_change.empty()) {
-    GreedyLocalSearch calc(prev_champion, iter_dic, distance_);
-    return {prev_champion, calc.tabu_cacl_cost()};
+    // GreedyLocalSearch calc(prev_champion, iter_dic, distance_);
+    // return {prev_champion, calc.tabu_cacl_cost()};
+    return {prev_champion, GreedyLocalSearch::compute_cost(prev_champion, iter_dic, distance_)};
   }
 
   // 2. 基于 Champion 频率计算 m(i)
@@ -362,8 +367,9 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
   }
 
   // 计算最终成本
-  GreedyLocalSearch calculater(temp_solution, iter_dic, distance_);
-  double relinkcost = calculater.tabu_cacl_cost();
+  // GreedyLocalSearch calculater(temp_solution, iter_dic, distance_);
+  // double relinkcost = calculater.tabu_cacl_cost();
+  double relinkcost = GreedyLocalSearch::compute_cost(temp_solution, iter_dic, distance_);
 
   return {temp_solution, relinkcost};
 }
@@ -526,10 +532,15 @@ void TabuSearch::search(int T, int Q, int TBL) {
   while (iter_count < MAX_TOTAL_ITER) {
     iter_count++;
 
+    // Calculate lambda(t)
+    double progress = static_cast<double>(iter_count) / MAX_TOTAL_ITER;
+    double lambda_t = lambda_0_ * (1.0 - progress);
+
     // 1. 生成邻域 (Candidate List) — 使用随机 operation_style 与上一次相同
+    // Added adjusted_cost as the 5th element
     using Candidate =
         std::tuple<double, std::vector<Point>,
-                   std::map<std::pair<int, int>, VertexInfo>, OpKey>;
+                   std::map<std::pair<int, int>, VertexInfo>, OpKey, double>;
     std::vector<Candidate> candidates;
 
     int valid_neighbors = 0;
@@ -562,7 +573,23 @@ void TabuSearch::search(int T, int Q, int TBL) {
       if (already_seen)
         continue;
 
-      candidates.emplace_back(n_cost, n_route, n_dic, key);
+      // Calculate entropy score s
+      double s = 0.0;
+      int he_count = 0;
+      int total_points = 0;
+      for (const auto &p : n_op) {
+        total_points++;
+        if (current_dic.at({p.x, p.y}).is_high_entropy) {
+          he_count++;
+        }
+      }
+      if (total_points > 0) {
+        s = static_cast<double>(he_count) / total_points;
+      }
+
+      double adjusted_cost = n_cost - lambda_t * s;
+
+      candidates.emplace_back(n_cost, n_route, n_dic, key, adjusted_cost);
       valid_neighbors++;
     }
 
@@ -570,6 +597,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
       break;
 
     // 2. 局部改进阶段 (4a)：按 TWOOPT → DROP → ADD 顺序寻找改进移动
+    // Sort by raw cost for improving moves
     std::sort(candidates.begin(), candidates.end(),
               [](const auto &a, const auto &b) {
                 return std::get<0>(a) < std::get<0>(b);
@@ -587,6 +615,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
         const auto &cand_route = std::get<1>(cand);
         const auto &cand_dic = std::get<2>(cand);
         const auto &c_key = std::get<3>(cand);
+        // double c_adj_cost = std::get<4>(cand);
 
         int old_size = static_cast<int>(current_sol.size());
         int new_size = static_cast<int>(cand_route.size());
@@ -605,6 +634,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
         bool aspiration = (c_cost < champion_cost_ - 1e-9);
 
         // 仅接受改进移动 (c_cost < current_cost)，且满足禁忌/破禁规则
+        // Improving moves selection is based on raw cost
         if ((is_tabu && !aspiration) || c_cost >= current_cost - 1e-9)
           continue;
 
@@ -651,8 +681,9 @@ void TabuSearch::search(int T, int Q, int TBL) {
         }
         tabu.update_tabu();
 
-        GreedyLocalSearch calc(current_sol, current_dic, distance_);
-        double div_cost = calc.tabu_cacl_cost();
+        // GreedyLocalSearch calc(current_sol, current_dic, distance_);
+        // double div_cost = calc.tabu_cacl_cost();
+        double div_cost = GreedyLocalSearch::compute_cost(current_sol, current_dic, distance_);
         current_cost = div_cost;
 
         if (div_cost < best_cost_ - 1e-9) {
@@ -675,19 +706,26 @@ void TabuSearch::search(int T, int Q, int TBL) {
       }
 
       // 4d. 若既未触发路径重连也未多样化，则选择“最佳非改进”移动
+      // Sort candidates by adjusted_cost for non-improving moves
+      std::sort(candidates.begin(), candidates.end(),
+                [](const auto &a, const auto &b) {
+                  return std::get<4>(a) < std::get<4>(b);
+                });
+
       bool found_non_improving = false;
       for (const auto &cand : candidates) {
         double c_cost = std::get<0>(cand);
         const auto &cand_route = std::get<1>(cand);
         const auto &cand_dic = std::get<2>(cand);
         const auto &c_key = std::get<3>(cand);
+        // double c_adj_cost = std::get<4>(cand);
 
         bool is_tabu = tabu.is_tabu_iter(c_key);
         if (is_tabu)
           continue; // 4d 要求非禁忌
 
         if (c_cost < current_cost - 1e-9)
-          continue; // 这里只考虑非改进移动
+          continue; // 这里只考虑非改进移动 (improving moves were handled in 4a)
 
         // 判定移动类型
         int old_size = static_cast<int>(current_sol.size());
@@ -705,7 +743,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
         chosen_cost = c_cost;
         move_key = c_key;
         found_non_improving = true;
-        break; // 借由 candidates 已排序，首个满足者即为“最佳”
+        break; // 借由 candidates 已排序 (by adjusted_cost)，首个满足者即为“最佳”
       }
 
       if (!found_non_improving) {

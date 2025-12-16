@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 #define PATH_RELINKING_TIMES 50
 // 论文中终止条件：执行两次多样化后停止
@@ -200,7 +201,40 @@ int main(int argc, char **argv) {
 
         // 构建点信息集
         std::map<std::pair<int, int>, VertexInfo> vertex_map;
-        build_vertex_map(locations, ontour, offtour, distance, vertex_map);
+        
+        // Calculate entropy and identify high entropy points
+        std::set<std::pair<int, int>> high_entropy_points;
+        if (!probs.empty()) {
+            std::vector<std::pair<double, std::pair<int, int>>> entropies;
+            for (const auto& pp : probs) {
+                // Check if point belongs to current instance
+                bool found = false;
+                for (const auto& loc : locations) {
+                    if (loc.x == pp.x && loc.y == pp.y) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) continue;
+
+                double h = 0.0;
+                if (pp.p_assign > 1e-9) h -= pp.p_assign * std::log(pp.p_assign);
+                if (pp.p_route > 1e-9) h -= pp.p_route * std::log(pp.p_route);
+                if (pp.p_loss > 1e-9) h -= pp.p_loss * std::log(pp.p_loss);
+                entropies.push_back({h, {pp.x, pp.y}});
+            }
+            
+            if (!entropies.empty()) {
+                std::sort(entropies.rbegin(), entropies.rend()); // Descending entropy
+                size_t he_count = std::max((size_t)1, (size_t)(entropies.size() * 0.2)); // Top 20%
+                for (size_t i = 0; i < he_count; ++i) {
+                    high_entropy_points.insert(entropies[i].second);
+                }
+                std::cout << "Identified " << high_entropy_points.size() << " high entropy points." << std::endl;
+            }
+        }
+
+        build_vertex_map(locations, ontour, offtour, distance, vertex_map, high_entropy_points);
         std::cout << "Build points info done" << std::endl;
 
         // 执行贪婪搜索 返回贪婪搜索后最优解（禁忌搜索初始解）
