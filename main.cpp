@@ -52,10 +52,11 @@ tabu_search(const std::vector<Point> &locations,
             const std::vector<std::vector<double>> &distance,
             const std::vector<Point> &ontour, const std::vector<Point> &offtour,
             const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-            const std::vector<Point> &route, const std::double_t cost) {
+            const std::vector<Point> &route, const std::double_t cost,
+            const std::map<std::pair<int, int>, double> &point_probs = {}) {
   // TODO
   TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route,
-                    cost);
+                    cost, point_probs);
   return solver;
 }
 
@@ -135,6 +136,14 @@ int main(int argc, char **argv) {
         // 尝试读取 Python 生成的 attention_probs.csv
         std::vector<PointProb> probs;
         read_attention_probs("attention_probs.csv", probs);
+
+        // 构建概率映射表，供 Tabu Search 多样化使用
+        std::map<std::pair<int, int>, double> point_probs_map;
+        if (!probs.empty()) {
+             for (const auto& pp : probs) {
+                 point_probs_map[{pp.x, pp.y}] = pp.p_route;
+             }
+        }
 
         bool used_python_backbone = false;
         // 简单的校验：如果 probs 数据量足够且能匹配到当前 locations
@@ -250,7 +259,8 @@ int main(int argc, char **argv) {
                         greedy_searcher.get_offtour(),
                         greedy_searcher.get_vertex_map(),
                         greedy_searcher.get_route(),
-                        greedy_searcher.get_cost());
+                        greedy_searcher.get_cost(),
+                        point_probs_map);
 
         std::cout << "Tabu search start" << std::endl;
 

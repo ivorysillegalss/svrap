@@ -87,12 +87,13 @@ TabuSearch::TabuSearch(
     const std::vector<std::vector<double>> &distance,
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
     const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-    const std::vector<Point> &route, const std::double_t &cost)
+    const std::vector<Point> &route, const std::double_t &cost,
+    const std::map<std::pair<int, int>, double> &point_probs)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route),
       solution_cost_(cost), iter_solution_(route), best_cost_(cost),
       champion_solution_(route), champion_vertex_map_(vertex_map),
-      champion_cost_(cost) {
+      champion_cost_(cost), point_probs_(point_probs) {
   cost_trend_.push_back(cost);
   // 初始解视为第一个 Champion，初始化频率统计
   update_champion_frequencies(champion_solution_);
@@ -508,16 +509,43 @@ TabuSearch::diversication(const std::vector<Point> &champion_route,
     int total = std::max(1, on_cnt + off_cnt);
 
     bool is_on = current_set.count(loc) > 0;
-    double m_i = 0.0;
-    if (is_on) {
-      m_i = static_cast<double>(on_cnt) / static_cast<double>(total);
-    } else {
-      m_i = static_cast<double>(off_cnt) / static_cast<double>(total);
+    double score = 0.0;
+    
+    // Hybrid Scoring Strategy
+    // score = w * freq_term + (1-w) * deviation_term
+    // We want to flip nodes with HIGH score.
+    double w_freq = 0.5; 
+    
+    double p_route = 0.5; // Default neutral probability
+    if (point_probs_.count(key)) {
+        p_route = point_probs_.at(key);
     }
-    candidate_vertices.push_back({loc, m_i});
+
+    if (is_on) {
+      // Node is currently ON.
+      // Freq term: High if it is frequently ON (stuck in ON).
+      double freq_term = static_cast<double>(on_cnt) / static_cast<double>(total);
+      
+      // Deviation term: High if model thinks it should be OFF (p_route low).
+      // deviation = |1 - p_route| = 1 - p_route
+      double dev_term = 1.0 - p_route;
+      
+      score = w_freq * freq_term + (1.0 - w_freq) * dev_term;
+    } else {
+      // Node is currently OFF.
+      // Freq term: High if it is frequently OFF (stuck in OFF).
+      double freq_term = static_cast<double>(off_cnt) / static_cast<double>(total);
+      
+      // Deviation term: High if model thinks it should be ON (p_route high).
+      // deviation = |0 - p_route| = p_route
+      double dev_term = p_route;
+      
+      score = w_freq * freq_term + (1.0 - w_freq) * dev_term;
+    }
+    candidate_vertices.push_back({loc, score});
   }
 
-  // 按照 m(i) 降序排序
+  // 按照 score 降序排序
   std::sort(candidate_vertices.begin(), candidate_vertices.end(),
             [](const auto &a, const auto &b) {
               return a.second > b.second;

@@ -39,7 +39,8 @@ public:
       const std::vector<std::vector<double>> &distance,
       const std::vector<Point> &ontour, const std::vector<Point> &offtour,
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-      const std::vector<Point> &route, const std::double_t &cost);
+      const std::vector<Point> &route, const std::double_t &cost,
+      const std::map<std::pair<int, int>, double> &point_probs = {});
 
   void search(int T, int Q, int TBL);
 
@@ -73,6 +74,9 @@ private:
   std::map<std::pair<int, int>, int> champion_on_count_;
   std::map<std::pair<int, int>, int> champion_off_count_;
   int champion_sample_count_ = 0;
+
+  // 存储每个点的预测概率 (x, y) -> p_route
+  std::map<std::pair<int, int>, double> point_probs_;
 
   // 多样化方法
   std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
