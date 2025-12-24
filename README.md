@@ -109,7 +109,6 @@ python svrap_solver.py --dataset formatted_dataset/berlin52.txt --train
     - **机制**: 计算混合得分 $Score = w \cdot \text{FreqTerm} + (1-w) \cdot \text{DevTerm}$。
         - `FreqTerm`: 节点长期处于某种状态的频率（历史经验）。
         - `DevTerm`: 节点当前状态与模型预测概率的偏差（模型直觉）。
-    - **效果**: 优先翻转那些“既长期卡住，又违背模型预测”的节点，从而更精准地跳出局部最优。在 `eil51` 等数据集上，该策略使收敛时间缩短了约 **24.5%**。
 
 ---
 
