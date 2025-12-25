@@ -39,6 +39,7 @@
 /tsp数据坐标集.txt
 /formatted_dataset/
 /models/
+/graph/
 /raw_dataset/
 
 # Python cache
