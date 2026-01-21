@@ -101,13 +101,14 @@ class SVRAPEnvironment:
         self.locations = [(x/scale, y/scale) for x, y in self.original_locations]
         self.tensor_locs = torch.tensor(self.locations, dtype=torch.float32)
 
-        # Calculate Distance Matrix
+        # Calculate Distance Matrix (TSPLIB EUC_2D standard: rounded integer)
         self.dist_matrix = torch.zeros((self.n, self.n))
         for i in range(self.n):
             for j in range(self.n):
                 d = math.sqrt((self.original_locations[i][0] - self.original_locations[j][0])**2 + 
                               (self.original_locations[i][1] - self.original_locations[j][1])**2)
-                self.dist_matrix[i][j] = d
+                # 与 TSPLIB EUC_2D 一致：四舍五入为整数
+                self.dist_matrix[i][j] = round(d)
 
         # Calculate Cost Matrices based on PARAM_A
         # c_ij = a * l_ij
@@ -178,14 +179,16 @@ class SVRAPEnvironment:
                     alloc_cost += min_d
 
         # 3. Isolation Cost
+        # f_isol = sum(D_i * v_i), 最终乘以 lambda_isol
         for idx in loss_indices:
-            isol_cost += self.D_i[idx].item() * self.lambda_isol
+            isol_cost += self.D_i[idx].item()
             if not SVRAPConfig.ALLOW_ISOLATED_VERTICES:
                 penalty += SVRAPConfig.ISOLATED_VERTEX_PENALTY
 
+        # 目标函数: Z = λ_tour * f_tour + λ_alloc * f_alloc + λ_isol * f_isol
         total_cost = (SVRAPConfig.LAMBDA_TOUR * tour_cost + 
                       SVRAPConfig.LAMBDA_ALLOC * alloc_cost + 
-                      isol_cost + penalty)
+                      self.lambda_isol * isol_cost + penalty)
         
         return total_cost, {
             "tour": tour_cost,
@@ -201,36 +204,35 @@ class SVRAPEnvironment:
 # 3. Neural Network Modules
 # ==========================================
 
-class GatedEdgeFusion(nn.Module):
-    def __init__(self, embed_dim):
+class EdgeBiasProjector(nn.Module):
+    """
+    Projects scalar edge weights (Cost or Distance) into an attention bias.
+    Replaces the old GatedEdgeFusion to avoid mixing D and C too early.
+    """
+    def __init__(self):
         super().__init__()
-        self.fc_edge = nn.Linear(2, embed_dim) # Input: (d_ij, c_ij)
-        self.gate = nn.Linear(embed_dim, 1)
-        self.proj = nn.Linear(embed_dim, 1) # Project to scalar bias
+        # Simple MLP to learn non-linear mapping from cost to attention penalty/boost
+        self.net = nn.Sequential(
+            nn.Linear(1, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1)
+        )
 
-    def forward(self, edge_feat):
-        # edge_feat: (N, N, 2)
-        x = F.relu(self.fc_edge(edge_feat)) # (N, N, embed_dim)
-        g = torch.sigmoid(self.gate(x))
-        out = self.proj(x * g) # (N, N, 1)
-        return out.squeeze(-1) # (N, N)
+    def forward(self, edge_scalar):
+        # edge_scalar: (N, N)
+        x = edge_scalar.unsqueeze(-1) # (N, N, 1)
+        bias = self.net(x).squeeze(-1) # (N, N)
+        return bias
 
-class SVRAPNetwork(nn.Module):
-    def __init__(self, embed_dim=128, n_heads=8):
+class ContextEncoder(nn.Module):
+    """
+    Standard Transformer Encoder Block that processes a specific context (Routing or Allocation).
+    """
+    def __init__(self, embed_dim, n_heads):
         super().__init__()
-        self.embed_dim = embed_dim
-        
-        # Node embedding
-        self.node_embed = nn.Linear(2, embed_dim)
-        
-        # Edge fusion
-        self.edge_fusion = GatedEdgeFusion(embed_dim)
-        
-        # Attention
         self.mha = nn.MultiheadAttention(embed_dim, n_heads, batch_first=True)
         self.ln1 = nn.LayerNorm(embed_dim)
         
-        # FFN
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, 4 * embed_dim),
             nn.ReLU(),
@@ -238,30 +240,78 @@ class SVRAPNetwork(nn.Module):
         )
         self.ln2 = nn.LayerNorm(embed_dim)
         
+        self.edge_proj = EdgeBiasProjector()
+
+    def forward(self, h, edge_matrix):
+        # h: (1, N, embed_dim)
+        # edge_matrix: (N, N) scalar edge features used for bias
+        
+        # 1. Generate Attention Bias from specific edge type
+        # Independent projection for this specific context
+        attn_bias = self.edge_proj(edge_matrix) # (N, N)
+        
+        # 2. Self Attention with Bias
+        attn_out, _ = self.mha(h, h, h, attn_mask=attn_bias)
+        h = self.ln1(h + attn_out)
+        
+        # 3. FFN
+        ffn_out = self.ffn(h)
+        h = self.ln2(h + ffn_out)
+        return h
+
+class SVRAPNetwork(nn.Module):
+    def __init__(self, embed_dim=128, n_heads=8):
+        super().__init__()
+        self.embed_dim = embed_dim
+        
+        # Initial Node embedding
+        self.node_embed = nn.Linear(2, embed_dim)
+        
+        # Dual-Stream Encoders (Decoupled Architecture)
+        
+        # Stream 1: Routing Context (Focuses on Connectivity/Tour Cost - C matrix)
+        self.routing_encoder = ContextEncoder(embed_dim, n_heads)
+        
+        # Stream 2: Allocation Context (Focuses on Proximity/Assignment Cost - D matrix)
+        self.alloc_encoder = ContextEncoder(embed_dim, n_heads)
+        
+        # Late Fusion Layer
+        # Concatenates both contexts and projects back to embedding dimension
+        self.fusion = nn.Sequential(
+            nn.Linear(2 * embed_dim, embed_dim),
+            nn.ReLU()
+        )
+        
         # Output heads (logits for ASSIGN, ROUTE, LOSS)
         self.classifier = nn.Linear(embed_dim, 3)
 
     def forward(self, x, edge_feat):
         # x: (1, N, 2)
-        # edge_feat: (1, N, N, 2)
+        # edge_feat: (1, N, N, 2) -> Contains (d_matrix, c_matrix)
         
-        # 1. Node Embeddings
-        h = self.node_embed(x) # (1, N, embed_dim)
+        # 1. Base Node Embeddings
+        h_base = self.node_embed(x) # (1, N, embed_dim)
         
-        # 2. Edge Bias
-        attn_bias = self.edge_fusion(edge_feat[0]) # (N, N)
+        # 2. Separate Edge Features
+        # edge_feat is stacked as [d_matrix, c_matrix] in run_pipeline
+        # Index 0 is Allocation (d), Index 1 is Routing (c)
+        d_matrix = edge_feat[0, :, :, 0] # (N, N)
+        c_matrix = edge_feat[0, :, :, 1] # (N, N)
         
-        # 3. Self Attention
-        # attn_mask in PyTorch MHA is additive if float
-        attn_out, _ = self.mha(h, h, h, attn_mask=attn_bias)
-        h = self.ln1(h + attn_out)
+        # 3. Independent Stream Processing
+        # "Routing Vector" generation: How "routable" is this node?
+        h_route = self.routing_encoder(h_base, c_matrix) # (1, N, embed_dim)
         
-        # 4. FFN
-        ffn_out = self.ffn(h)
-        h = self.ln2(h + ffn_out)
+        # "Allocation Vector" generation: How good is this node at covering others?
+        h_alloc = self.alloc_encoder(h_base, d_matrix) # (1, N, embed_dim)
         
-        # 5. Output
-        logits = self.classifier(h) # (1, N, 3)
+        # 4. Late Fusion
+        # Now we combine the "expert opinions"
+        h_concat = torch.cat([h_route, h_alloc], dim=-1) # (1, N, 2*embed_dim)
+        h_fused = self.fusion(h_concat) # (1, N, embed_dim)
+        
+        # 5. Classification
+        logits = self.classifier(h_fused) # (1, N, 3)
         return logits
 
 # ==========================================
@@ -433,8 +483,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None, help="Path to the dataset file (e.g., formatted_dataset/berlin52.txt)")
     parser.add_argument("--train", action="store_true", help="Force training even if model exists")
     parser.add_argument("--no-train", action="store_true", help="Skip training, only inference")
+    parser.add_argument("--epochs", type=int, default=2000, help="Number of training epochs")
     
     args = parser.parse_args()
+
+    # Update Config
+    SVRAPConfig.EPOCHS = args.epochs
     
     dataset_path = args.dataset
     

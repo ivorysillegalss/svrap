@@ -14,6 +14,20 @@
 using OpKey = std::variant<std::vector<Point>,
                            std::pair<std::vector<Point>, std::vector<Point>>>;
 
+struct StrategyConfig {
+  bool use_neural_init = true;
+  bool use_entropy = true;
+  bool use_path_relinking = true;
+  bool use_diversification = true;
+  bool use_knn = true;
+  bool use_frequency_based_diversification = true;
+  int k_neighbors = 20;
+  int tabu_list_length = 15;
+  int diversification_times = 2;
+  int path_relinking_times = 50;
+  double entropy_weight = 1.0;
+};
+
 class TabuInfo {
 private:
   std::vector<OpKey> tabu_list;
@@ -40,7 +54,8 @@ public:
       const std::vector<Point> &ontour, const std::vector<Point> &offtour,
       const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
       const std::vector<Point> &route, const std::double_t &cost,
-      const std::map<std::pair<int, int>, double> &point_probs = {});
+      const std::map<std::pair<int, int>, double> &point_probs = {},
+      StrategyConfig config = StrategyConfig());
 
   void search(int T, int Q, int TBL);
 
@@ -96,9 +111,11 @@ private:
   // 熵退火参数
   double lambda_0_ = 1.0;
 
+  StrategyConfig config_;
+
   // Precomputed K-nearest neighbors for each point (by index)
   std::vector<std::vector<int>> nearby_table_;
-  const int K_NEIGHBORS = 20;
+  int K_NEIGHBORS;
 
     // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
     std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,

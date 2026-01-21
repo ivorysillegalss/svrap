@@ -247,16 +247,34 @@ double GreedyLocalSearch::compute_allocation_cost(
     const auto &info = entry.second;
     if (info.status == "Y") continue;
 
+    // 计算分配成本: d_ij = (10-a) * l_ij，取到在途节点的最小值
     double best_l = std::numeric_limits<double>::max();
     for (size_t idx_on : route_indices) {
       double lij = distance[info.index][idx_on];
       if (lij < best_l) best_l = lij;
     }
-
     double allocation_term = lambda_alloc * (10.0 - a) * best_l;
-    double isolation_term = (info.isolation_cost > 0.0) ? 
-        lambda_isol * info.isolation_cost : std::numeric_limits<double>::max();
 
+    // 计算隔离成本: D_i * lambda_isol
+    // 如果 isolation_cost > 0 (从外部文件读取)，使用该值
+    // 否则使用默认值: D_i = min_{j!=i} d_ij = (10-a) * min_{j!=i} l_ij
+    double D_i;
+    if (info.isolation_cost > 0.0) {
+      D_i = info.isolation_cost;
+    } else {
+      // 默认 D_i: 到所有其他节点的最小分配成本
+      double min_l_global = std::numeric_limits<double>::max();
+      for (size_t j = 0; j < distance.size(); ++j) {
+        if (j != info.index) {
+          double lij = distance[info.index][j];
+          if (lij < min_l_global) min_l_global = lij;
+        }
+      }
+      D_i = (10.0 - a) * min_l_global;
+    }
+    double isolation_term = lambda_isol * D_i;
+
+    // 选择分配或隔离中成本较低的方案
     alloc_iso_cost += std::min(allocation_term, isolation_term);
   }
   return alloc_iso_cost;

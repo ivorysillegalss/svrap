@@ -88,12 +88,24 @@ TabuSearch::TabuSearch(
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
     const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
     const std::vector<Point> &route, const std::double_t &cost,
-    const std::map<std::pair<int, int>, double> &point_probs)
+    const std::map<std::pair<int, int>, double> &point_probs,
+    StrategyConfig config)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route),
       solution_cost_(cost), iter_solution_(route), best_cost_(cost),
       champion_solution_(route), champion_vertex_map_(vertex_map),
-      champion_cost_(cost), point_probs_(point_probs) {
+      champion_cost_(cost), point_probs_(point_probs), config_(config),
+      K_NEIGHBORS(config.k_neighbors) {
+  
+  if (!config_.use_neural_init) {
+      point_probs_.clear();
+  }
+  
+  lambda_0_ = config.entropy_weight;
+  if (!config_.use_entropy) {
+      lambda_0_ = 0.0;
+  }
+
   cost_trend_.push_back(cost);
   // 初始解视为第一个 Champion，初始化频率统计
   update_champion_frequencies(champion_solution_);
@@ -199,7 +211,7 @@ TabuSearch ::operation_style(
     // Fallback: If no neighbors are in the route (rare), we might want to check all?
     // Or just check all if route is small.
     
-    bool use_knn = true;
+    bool use_knn = config_.use_knn;
     if (route.size() < 10) use_knn = false; // For very small routes, just check all
 
     if (!use_knn) {
@@ -546,10 +558,15 @@ TabuSearch::diversication(const std::vector<Point> &champion_route,
   }
 
   // 按照 score 降序排序
-  std::sort(candidate_vertices.begin(), candidate_vertices.end(),
-            [](const auto &a, const auto &b) {
-              return a.second > b.second;
-            });
+  if (config_.use_frequency_based_diversification) {
+      std::sort(candidate_vertices.begin(), candidate_vertices.end(),
+                [](const auto &a, const auto &b) {
+                  return a.second > b.second;
+                });
+  } else {
+      // Random shuffle for non-optimized diversification
+      std::shuffle(candidate_vertices.begin(), candidate_vertices.end(), rng);
+  }
 
   // 3. 对前 n/2 个顶点执行“状态反转” (ADD 或 DROP)
   int n = static_cast<int>(locations_.size());
@@ -788,8 +805,8 @@ void TabuSearch::search(int T, int Q, int TBL) {
       const int ADD_DROP_LIMIT = 20;
       const int TWOOPT_LIMIT = 15;
 
-      if (move_since_champion_adddrop >= ADD_DROP_LIMIT ||
-          move_since_champion_twoopt >= TWOOPT_LIMIT) {
+      if (config_.use_diversification && (move_since_champion_adddrop >= ADD_DROP_LIMIT ||
+          move_since_champion_twoopt >= TWOOPT_LIMIT)) {
         q++;
         if (q >= Q)
           break; // 两次多样化后终止
@@ -903,27 +920,29 @@ void TabuSearch::search(int T, int Q, int TBL) {
 
       update_champion_frequencies(champion_solution_);
 
-      // 路径重连：在前一个 Champion 与新 Champion 之间
-      std::vector<OpKey> pr_moves;
-      auto [pr_sol, pr_cost] =
-          path_relinking(prev_champion_solution_, champion_solution_,
-                         champion_vertex_map_, pr_moves);
+      if (config_.use_path_relinking) {
+        // 路径重连：在前一个 Champion 与新 Champion 之间
+        std::vector<OpKey> pr_moves;
+        auto [pr_sol, pr_cost] =
+            path_relinking(prev_champion_solution_, champion_solution_,
+                           champion_vertex_map_, pr_moves);
 
-      for (const auto &op : pr_moves) {
-        tabu.add_tabu_iter(op, TBL);
-      }
-      tabu.update_tabu();
+        for (const auto &op : pr_moves) {
+          tabu.add_tabu_iter(op, TBL);
+        }
+        tabu.update_tabu();
 
-      if (pr_cost < best_cost_ - 1e-9) {
-        champion_solution_ = pr_sol;
-        champion_cost_ = pr_cost;
-        best_cost_ = pr_cost;
-        iter_solution_ = pr_sol;
-        cost_trend_.push_back(best_cost_);
-        current_sol = pr_sol;
-        current_cost = pr_cost;
+        if (pr_cost < best_cost_ - 1e-9) {
+          champion_solution_ = pr_sol;
+          champion_cost_ = pr_cost;
+          best_cost_ = pr_cost;
+          iter_solution_ = pr_sol;
+          cost_trend_.push_back(best_cost_);
+          current_sol = pr_sol;
+          current_cost = pr_cost;
 
-        update_champion_frequencies(champion_solution_);
+          update_champion_frequencies(champion_solution_);
+        }
       }
 
       move_since_champion_adddrop = 0;

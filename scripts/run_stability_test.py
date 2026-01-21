@@ -7,7 +7,8 @@ import pandas as pd
 
 # Configuration
 EXE_PATH = "../svrap.exe"  # Adjust if needed (e.g. "Release/svrap.exe")
-ALPHA = 1.0
+PYTHON_SOLVER = "../svrap_solver.py"
+ALPHA = 7.0  # Standard test alpha value
 STRATEGY = "full" # Default strategy
 DATASETS = [
     "../formatted_dataset/kroA100.txt",
@@ -43,6 +44,16 @@ def run_solver(dataset, alpha, strategy):
         
     return best_cost, elapsed
 
+def run_inference(dataset_path):
+    """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
+    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error generating probs for {dataset_path}: {e}")
+        return False
+
 def main():
     if not os.path.exists(EXE_PATH):
         print(f"Error: Executable not found at {EXE_PATH}")
@@ -60,6 +71,10 @@ def main():
             
         dataset_name = os.path.basename(dataset)
         print(f"Processing {dataset_name}...")
+        
+        # Generate neural network probabilities first
+        print(f"  Generating attention probabilities...")
+        run_inference(dataset)
         
         dataset_costs = []
         dataset_times = []

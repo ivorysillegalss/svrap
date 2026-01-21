@@ -10,6 +10,19 @@ from typing import List, Dict, Tuple
 
 BEST_COST_PATTERN = re.compile(r"Best cost(?: for .*?)?=\s*([0-9eE+\-.]+)")
 
+PYTHON_SOLVER = "svrap_solver.py"  # Path relative to workspace root
+
+
+def run_inference(dataset_path: str) -> bool:
+    """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
+    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[WARN] Error generating probs for {dataset_path}: {e}", file=sys.stderr)
+        return False
+
 
 def run_instance(exe_path: str, alpha: float, dataset_path: str) -> Tuple[float, float, str]:
     """Run svrap.exe on a single dataset with given alpha.
@@ -147,6 +160,15 @@ def main() -> None:
         for alpha, ds_path in jobs:
             ds_name = os.path.basename(ds_path)
             start_wall = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Generate neural network probabilities first (once per dataset)
+            # Check if we already ran inference for this dataset in this session
+            if not hasattr(run_instance, '_inferred_datasets'):
+                run_instance._inferred_datasets = set()
+            if ds_path not in run_instance._inferred_datasets:
+                run_inference(ds_path)
+                run_instance._inferred_datasets.add(ds_path)
+            
             best_cost, elapsed, _ = run_instance(exe_path, alpha, ds_path)
 
             # Console output

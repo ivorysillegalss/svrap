@@ -84,9 +84,11 @@ void read_isolation_costs(const std::string &filename) {
 
   std::ifstream file(filename);
   if (!file.is_open()) {
-    // 如果文件不存在，不视为致命错误，允许默认 isolation_cost=0
+    // 如果文件不存在，不视为致命错误。
+    // 当 isolation_cost=0 时，compute_allocation_cost 会自动
+    // 使用默认值 D_i = (10-α) * min_{j!=i} l_ij
     std::cout << "Warning: failed to open isolation cost file: " << filename
-              << " (all isolation_cost will default to 0)" << std::endl;
+              << " (will use default D_i = min d_ij)" << std::endl;
     return;
   }
 

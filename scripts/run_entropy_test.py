@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 
 # Configuration
 EXE_PATH = "../svrap.exe"
-ALPHA = 1.0
+PYTHON_SOLVER = "../svrap_solver.py"
+ALPHA = 7.0  # Standard test alpha value
 STRATEGY = "full"
 OUTPUT_FILE = "../results/entropy_sensitivity_summary.csv"
 

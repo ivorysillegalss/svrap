@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 
 # Configuration
 EXE_PATH = "../svrap.exe"
-ALPHA = 1.0
+PYTHON_SOLVER = "../svrap_solver.py"
+ALPHA = 7.0  # Standard test alpha value
 STRATEGY = "full"
 DATASET = "../formatted_dataset/kroA100.txt" # Focus on one dataset for hyperparam tuning
 OUTPUT_FILE = "../results/hyperparam_sensitivity_results.csv"
@@ -49,6 +50,16 @@ def run_solver(dataset, alpha, strategy, k, tabu_len, div_times, pr_times):
         
     return best_cost, elapsed
 
+def run_inference(dataset_path):
+    """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
+    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error generating probs for {dataset_path}: {e}")
+        return False
+
 def main():
     if not os.path.exists(EXE_PATH):
         print(f"Error: Executable not found at {EXE_PATH}")
@@ -57,6 +68,10 @@ def main():
     if not os.path.exists(DATASET):
         print(f"Error: Dataset {DATASET} not found.")
         return
+
+    # Generate neural network probabilities first
+    print(f"Generating attention probabilities for {DATASET}...")
+    run_inference(DATASET)
 
     results = []
     

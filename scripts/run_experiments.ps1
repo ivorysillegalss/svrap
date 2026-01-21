@@ -56,29 +56,9 @@ foreach ($File in $Datasets) {
     # 1. Run Python (Train/Inference + Generate Initial Solution)
     Write-Host "  [1/2] Running Python Policy Network..." -NoNewline
     
-    "COMMAND: python $PythonScript --dataset `"$DatasetPath`" --train" | Out-File -FilePath $LogFile -Append -Encoding utf8
+    "COMMAND: $PythonExe $PythonScript --dataset `"$DatasetPath`" --train" | Out-File -FilePath $LogFile -Append -Encoding utf8
     
-    # Reset exit code
-    $LASTEXITCODE = 0
-    
-    # Use call operator & to execute command
-    # 2>&1 redirects stderr to stdout so Out-File captures everything
-    # Explicitly use the python from the active environment if possible, or just 'python'
-    & python $PythonScript --dataset "$DatasetPath" --train 2>&1 | Out-File -FilePath $LogFile -Append -Encoding utf8
-    
-    # Check $LASTEXITCODE directly, but note that piping to Out-File might mask it in some PS versions.
-    # However, in standard PS, $LASTEXITCODE should be preserved for the first command in the pipe if it fails? 
-    # Actually, piping resets $LASTEXITCODE to the status of the last command in the pipe (Out-File), which is usually 0.
-    # We need a better way to capture output AND check exit code.
-    
-    if ($?) { # $? is True if the last command (Out-File) succeeded. This doesn't help with python failure.
-         # To correctly catch the exit code of python when piping, we need to be careful.
-         # But for now, let's assume if python crashes it prints a traceback which we see in the log.
-         # The user's log shows "python.exe : Traceback..." which implies it wrote to stderr.
-         # The script continued to C++ because the pipe swallowed the failure status.
-    }
-    
-    # FIX: Run command, capture output, check status, THEN write to file.
+    # Run command, capture output, check status, THEN write to file.
     $pyOutput = & $PythonExe $PythonScript --dataset "$DatasetPath" --train 2>&1
     $pyStatus = $LASTEXITCODE
     

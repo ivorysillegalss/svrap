@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 # Configuration
 EXE_PATH = "../svrap.exe"
+PYTHON_SOLVER = "../svrap_solver.py"
 STRATEGY = "full"
 DATASET_DIR = "../formatted_dataset"
 ALPHAS = [3.0, 5.0, 7.0, 9.0]
@@ -23,6 +24,16 @@ def get_all_datasets(directory):
         if f.endswith(".txt"):
             datasets.append(os.path.join(directory, f))
     return sorted(datasets)
+
+def run_inference(dataset_path):
+    """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
+    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error generating probs for {dataset_path}: {e}")
+        return False
 
 def run_solver(dataset, alpha, strategy):
     cmd = [EXE_PATH, str(alpha), dataset, strategy]
@@ -64,6 +75,9 @@ def main():
     for dataset in datasets:
         dataset_name = os.path.basename(dataset)
         print(f"Processing {dataset_name}...")
+        
+        # Generate neural network probabilities first
+        run_inference(dataset)
 
         for alpha in ALPHAS:
             cost, time_taken = run_solver(dataset, alpha, STRATEGY)

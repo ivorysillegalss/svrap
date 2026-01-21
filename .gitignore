@@ -41,6 +41,8 @@
 /models/
 /graph/
 /raw_dataset/
+# /scripts/
+/results/
 
 # Python cache
 __pycache__/
@@ -59,3 +61,5 @@ Thumbs.db
 
 # Build
 /app
+backbone_indices.txt
+attention_probs.csv

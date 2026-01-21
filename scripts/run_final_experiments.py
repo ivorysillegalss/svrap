@@ -10,7 +10,7 @@ EXE_PATH = "../svrap.exe"
 PYTHON_SOLVER = "../svrap_solver.py"
 FORMATTED_DATASET_DIR = "../formatted_dataset"
 RESULTS_FILE = "../results/final_experiment_results.csv"
-ALPHA = 1.0
+ALPHA = 7.0  # Standard test alpha value (use 3, 5, 7, or 9 as needed)
 STRATEGY = "full"
 
 # Best Hyperparameters (Size Dependent)

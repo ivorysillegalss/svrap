@@ -13,10 +13,10 @@
 #include <vector>
 #include <set>
 
-#define PATH_RELINKING_TIMES 50
-// 论文中终止条件：执行两次多样化后停止
-#define DIVERSIFICATION 2
-#define TABU_LIST_LENGTH 15
+// #define PATH_RELINKING_TIMES 50
+// // 论文中终止条件：执行两次多样化后停止
+// #define DIVERSIFICATION 2
+// #define TABU_LIST_LENGTH 15
 
 GreedyLocalSearch
 greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
@@ -53,10 +53,11 @@ tabu_search(const std::vector<Point> &locations,
             const std::vector<Point> &ontour, const std::vector<Point> &offtour,
             const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
             const std::vector<Point> &route, const std::double_t cost,
-            const std::map<std::pair<int, int>, double> &point_probs = {}) {
+            const std::map<std::pair<int, int>, double> &point_probs = {},
+            StrategyConfig config = StrategyConfig()) {
   // TODO
   TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route,
-                    cost, point_probs);
+                    cost, point_probs, config);
   return solver;
 }
 
@@ -103,6 +104,69 @@ int main(int argc, char **argv) {
           "formatted_dataset/u159.txt"};
     }
 
+    StrategyConfig config;
+    if (argc >= 4) {
+        std::string strategy = argv[3];
+        if (strategy == "baseline") {
+            config.use_neural_init = false;
+            config.use_entropy = false;
+        } else if (strategy == "no_nn") {
+            config.use_neural_init = false;
+        } else if (strategy == "no_entropy") {
+            config.use_entropy = false;
+        } else if (strategy == "no_knn") {
+            config.use_knn = false;
+        } else if (strategy == "simple_div") {
+            config.use_frequency_based_diversification = false;
+        }
+        std::cout << "Running Strategy: " << strategy << std::endl;
+    }
+
+    if (argc >= 5) {
+        try {
+            config.k_neighbors = std::stoi(argv[4]);
+            std::cout << "Using K_NEIGHBORS = " << config.k_neighbors << std::endl;
+        } catch (...) {
+             std::cout << "Warning: failed to parse K from argv[4], keep default " << config.k_neighbors << std::endl;
+        }
+    }
+
+    if (argc >= 6) {
+        try {
+            config.tabu_list_length = std::stoi(argv[5]);
+            std::cout << "Using TABU_LIST_LENGTH = " << config.tabu_list_length << std::endl;
+        } catch (...) {
+             std::cout << "Warning: failed to parse TABU_LIST_LENGTH from argv[5], keep default " << config.tabu_list_length << std::endl;
+        }
+    }
+
+    if (argc >= 7) {
+        try {
+            config.diversification_times = std::stoi(argv[6]);
+            std::cout << "Using DIVERSIFICATION_TIMES = " << config.diversification_times << std::endl;
+        } catch (...) {
+             std::cout << "Warning: failed to parse DIVERSIFICATION_TIMES from argv[6], keep default " << config.diversification_times << std::endl;
+        }
+    }
+
+    if (argc >= 8) {
+        try {
+            config.path_relinking_times = std::stoi(argv[7]);
+            std::cout << "Using PATH_RELINKING_TIMES = " << config.path_relinking_times << std::endl;
+        } catch (...) {
+             std::cout << "Warning: failed to parse PATH_RELINKING_TIMES from argv[7], keep default " << config.path_relinking_times << std::endl;
+        }
+    }
+
+    if (argc >= 9) {
+        try {
+            config.entropy_weight = std::stod(argv[8]);
+            std::cout << "Using ENTROPY_WEIGHT = " << config.entropy_weight << std::endl;
+        } catch (...) {
+             std::cout << "Warning: failed to parse ENTROPY_WEIGHT from argv[8], keep default " << config.entropy_weight << std::endl;
+        }
+    }
+
     for (const auto &file : instance_files) {
       try {
         std::cout << "==============================\n";
@@ -139,7 +203,7 @@ int main(int argc, char **argv) {
 
         // 构建概率映射表，供 Tabu Search 多样化使用
         std::map<std::pair<int, int>, double> point_probs_map;
-        if (!probs.empty()) {
+        if (config.use_neural_init && !probs.empty()) {
              for (const auto& pp : probs) {
                  point_probs_map[{pp.x, pp.y}] = pp.p_route;
              }
@@ -147,7 +211,7 @@ int main(int argc, char **argv) {
 
         bool used_python_backbone = false;
         // 简单的校验：如果 probs 数据量足够且能匹配到当前 locations
-        if (!probs.empty()) {
+        if (config.use_neural_init && !probs.empty()) {
           // 按 p_route 降序排序
           std::sort(probs.begin(), probs.end(),
                     [](const PointProb &a, const PointProb &b) {
@@ -214,7 +278,7 @@ int main(int argc, char **argv) {
         
         // Calculate entropy and identify high entropy points
         std::set<std::pair<int, int>> high_entropy_points;
-        if (!probs.empty()) {
+        if (config.use_entropy && !probs.empty()) {
             std::vector<std::pair<double, std::pair<int, int>>> entropies;
             for (const auto& pp : probs) {
                 // Check if point belongs to current instance
@@ -260,13 +324,14 @@ int main(int argc, char **argv) {
                         greedy_searcher.get_vertex_map(),
                         greedy_searcher.get_route(),
                         greedy_searcher.get_cost(),
-                        point_probs_map);
+                        point_probs_map,
+                        config);
 
         std::cout << "Tabu search start" << std::endl;
 
         auto start_time = std::chrono::high_resolution_clock::now();
-        tabu_seracher.search(PATH_RELINKING_TIMES, DIVERSIFICATION,
-                             TABU_LIST_LENGTH);
+        tabu_seracher.search(config.path_relinking_times, config.diversification_times,
+                             config.tabu_list_length);
         auto end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = end_time - start_time;
 

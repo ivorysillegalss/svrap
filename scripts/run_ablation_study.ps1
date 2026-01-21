@@ -20,7 +20,7 @@ $datasets = @(
 $strategies = @("baseline", "no_nn", "no_entropy", "no_knn", "simple_div", "full")
 $alpha = 7
 $numRuns = 30
-$exePath = ".\svrap_test.exe"
+$exePath = ".\svrap.exe"
 $resultsFile = "ablation_results.csv"
 
 # Initialize CSV if it doesn't exist
