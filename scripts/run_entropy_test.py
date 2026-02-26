@@ -33,11 +33,12 @@ DEFAULT_PR = 50
 BEST_COST_PATTERN = re.compile(r"Best cost(?: for .*?)?=\s*([0-9eE+\-.]+)")
 
 def generate_probs(dataset_path):
-    """Generates dummy attention_probs.csv for the given dataset."""
-    cmd = ["python", "generate_dummy_probs.py", dataset_path, "attention_probs.csv"]
+    """Generates neural probabilities for the given dataset."""
+    # Uses the shared solver script to generate attention_probs.csv
+    cmd = [sys.executable, PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-        # print(f"Generated dummy probs for {os.path.basename(dataset_path)}")
+        # print(f"Generated neural probs for {os.path.basename(dataset_path)}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating probs for {dataset_path}: {e}")
 

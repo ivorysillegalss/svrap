@@ -20,16 +20,21 @@ $datasets = @(
 $strategies = @("baseline", "no_nn", "no_entropy", "no_knn", "simple_div", "full")
 $alpha = 7
 $numRuns = 30
-$exePath = ".\svrap.exe"
-$resultsFile = "ablation_results.csv"
+$root = ".."  # Assuming running from scripts/ directory
+$exePath = "$root\svrap.exe"
+$resultsDir = "$root\results"
+$resultsFile = "$resultsDir\ablation_results.csv"
 
-# Initialize CSV if it doesn't exist
-if (-not (Test-Path $resultsFile)) {
-    "Dataset,Strategy,Run,BestCost,Time" | Out-File -FilePath $resultsFile -Encoding utf8
+# Ensure results directory exists
+if (-not (Test-Path $resultsDir)) {
+    New-Item -ItemType Directory -Path $resultsDir | Out-Null
 }
 
+# Initialize CSV if it doesn't exist (overwrite if cleaning)
+"Dataset,Strategy,Run,BestCost,Time" | Out-File -FilePath $resultsFile -Encoding utf8
+
 foreach ($dataset in $datasets) {
-    $datasetPath = "formatted_dataset/$dataset"
+    $datasetPath = "$root\formatted_dataset\$dataset"
     
     # Check if dataset exists
     if (-not (Test-Path $datasetPath)) {
@@ -37,16 +42,10 @@ foreach ($dataset in $datasets) {
         continue
     }
 
-    # Generate neural probabilities ONCE per dataset (or per run if we want to test NN stability too?)
-    # Usually, we want to test the search stability given a fixed NN output, OR the whole system stability.
-    # Given the NN training might be deterministic or not, let's generate it once per dataset to save time,
-    # unless you want to test NN training variance too.
-    # Assuming we use the pre-trained model or train once.
-    # Let's run inference once per dataset to get attention_probs.csv.
-    
+    # Generate neural probabilities ONCE per dataset
     Write-Host "Generating probabilities for $dataset..."
-    # Ensure we use the correct python environment with torch
-    python svrap_solver.py --dataset $datasetPath --no-train
+    # Using python from path, ensure environment is active
+    & "C:\Users\chenz\miniconda3\envs\altr-py310\python.exe" "$root\svrap_solver.py" --dataset $datasetPath --no-train
     
     foreach ($strategy in $strategies) {
         Write-Host "Running $dataset with $strategy ($numRuns runs)..."
@@ -63,7 +62,16 @@ foreach ($dataset in $datasets) {
                 if ($line -match "Best cost for .* = ([\d\.]+)") {
                     $bestCost = $matches[1]
                 }
+                # Fallback for simpler output
+                if ($bestCost -eq "N/A" -and $line -match "Best cost.*?=\s*([\d\.]+)") {
+                    $bestCost = $matches[1]
+                }
+
                 if ($line -match "Tabu search finished in ([\d\.]+)s") {
+                    $time = $matches[1]
+                }
+                 # Fallback for simpler output
+                 if ($time -eq "N/A" -and $line -match "finished in\s*([\d\.]+)s") {
                     $time = $matches[1]
                 }
             }
@@ -77,5 +85,4 @@ foreach ($dataset in $datasets) {
         }
     }
 }
-
 Write-Host "Ablation study complete. Results saved to $resultsFile"

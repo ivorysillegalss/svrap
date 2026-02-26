@@ -18,7 +18,7 @@ DATASETS = [
     "../formatted_dataset/kroE100.txt"
 ]
 OUTPUT_FILE = "../results/stability_test_results.csv"
-NUM_RUNS = 10  # Run each dataset 10 times
+NUM_RUNS = 30  # Run each dataset 3 times
 
 BEST_COST_PATTERN = re.compile(r"Best cost(?: for .*?)?=\s*([0-9eE+\-.]+)")
 
@@ -46,7 +46,7 @@ def run_solver(dataset, alpha, strategy):
 
 def run_inference(dataset_path):
     """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
-    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    cmd = [sys.executable, PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         return True

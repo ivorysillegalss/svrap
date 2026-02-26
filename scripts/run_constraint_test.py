@@ -27,7 +27,7 @@ def get_all_datasets(directory):
 
 def run_inference(dataset_path):
     """Runs svrap_solver.py in inference mode to generate attention_probs.csv"""
-    cmd = ["python", PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
+    cmd = [sys.executable, PYTHON_SOLVER, "--dataset", dataset_path, "--no-train"]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         return True
@@ -61,7 +61,15 @@ def main():
         print(f"Error: Executable not found at {EXE_PATH}")
         return
 
-    datasets = get_all_datasets(DATASET_DIR)
+    # datasets = get_all_datasets(DATASET_DIR)
+    # Use subset for faster testing in this environment
+    subset_names = [
+        'd198.txt', 'd493.txt', 'u159.txt', 'gr96.txt', 
+        'gr120.txt', 'gr137.txt', 'bier127.txt', 'berlin52.txt', 
+        'rat783.txt', 'pr107.txt', 'pr152.txt'
+    ]
+    datasets = [os.path.join(DATASET_DIR, d) for d in subset_names if os.path.exists(os.path.join(DATASET_DIR, d))]
+
     if not datasets:
         print(f"No datasets found in {DATASET_DIR}")
         return
