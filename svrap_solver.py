@@ -157,13 +157,25 @@ class SVRAPEnvironment:
 
         # 1. Tour Cost
         if len(route_indices) > 0:
-            # Approximate tour cost using the order of indices
-            current_tour = route_indices.tolist()
-            if len(current_tour) > 1:
-                for k in range(len(current_tour)):
-                    u = current_tour[k]
-                    v = current_tour[(k + 1) % len(current_tour)]
-                    tour_cost += self.c_matrix[u, v].item()
+            # Approximate tour cost: Need a TSP solver for an exact tour.
+            # Here we use a simple Nearest Neighbor heuristic to approximate the tour cost
+            # rather than just connecting nodes by their random index order.
+            current_nodes = route_indices.tolist()
+            if len(current_nodes) > 1:
+                unvisited = set(current_nodes)
+                current = current_nodes[0]
+                unvisited.remove(current)
+                first_node = current
+                
+                while unvisited:
+                    # Find nearest unvisited node based on c_matrix
+                    next_node = min(unvisited, key=lambda x: self.c_matrix[current, x].item())
+                    tour_cost += self.c_matrix[current, next_node].item()
+                    unvisited.remove(next_node)
+                    current = next_node
+                
+                # Connect last node back to first to complete the tour
+                tour_cost += self.c_matrix[current, first_node].item()
         else:
             # No route nodes
             if len(assign_indices) > 0:
