@@ -224,10 +224,7 @@ class EdgeBiasProjector(nn.Module):
         bias = self.net(x).squeeze(-1) # (N, N)
         return bias
 
-class ContextEncoder(nn.Module):
-    """
-    Standard Transformer Encoder Block that processes a specific context (Routing or Allocation).
-    """
+class ContextEncoderLayer(nn.Module):
     def __init__(self, embed_dim, n_heads):
         super().__init__()
         self.mha = nn.MultiheadAttention(embed_dim, n_heads, batch_first=True)
@@ -239,8 +236,25 @@ class ContextEncoder(nn.Module):
             nn.Linear(4 * embed_dim, embed_dim)
         )
         self.ln2 = nn.LayerNorm(embed_dim)
+
+    def forward(self, h, attn_bias):
+        attn_out, _ = self.mha(h, h, h, attn_mask=attn_bias)
+        h = self.ln1(h + attn_out)
         
+        ffn_out = self.ffn(h)
+        h = self.ln2(h + ffn_out)
+        return h
+
+class ContextEncoder(nn.Module):
+    """
+    Standard Transformer Encoder Block that processes a specific context (Routing or Allocation).
+    """
+    def __init__(self, embed_dim, n_heads, num_layers=3):
+        super().__init__()
         self.edge_proj = EdgeBiasProjector()
+        self.layers = nn.ModuleList([
+            ContextEncoderLayer(embed_dim, n_heads) for _ in range(num_layers)
+        ])
 
     def forward(self, h, edge_matrix):
         # h: (1, N, embed_dim)
@@ -250,13 +264,10 @@ class ContextEncoder(nn.Module):
         # Independent projection for this specific context
         attn_bias = self.edge_proj(edge_matrix) # (N, N)
         
-        # 2. Self Attention with Bias
-        attn_out, _ = self.mha(h, h, h, attn_mask=attn_bias)
-        h = self.ln1(h + attn_out)
-        
-        # 3. FFN
-        ffn_out = self.ffn(h)
-        h = self.ln2(h + ffn_out)
+        # 2. Forward through multiple attention layers
+        for layer in self.layers:
+            h = layer(h, attn_bias)
+            
         return h
 
 class SVRAPNetwork(nn.Module):

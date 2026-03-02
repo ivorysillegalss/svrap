@@ -1,7 +1,7 @@
 """
 SVRAP 完整测试流水线
 - 阶段1: 为所有数据集训练模型
-- 阶段2: 运行完整测试套件
+- 阶段2: 运行完整测试套件 (内部采用单任务带参模式，规避了 C++ 内部循环对 CSV 预读的问题)
 - 包含心跳监控 (每10分钟输出状态)
 """
 
@@ -226,12 +226,12 @@ def phase2_run_tests():
             print(f"[SKIP] {dataset} not found")
             continue
         
-        print(f"\n>>> Testing {dataset}...")
+        print(f"\n>>> 测试 {dataset}...")
         
-        # Generate backbone first
-        update_heartbeat(task=f"Inference: {dataset}")
+        # 步骤 1: 首先运行 Python 策略网络推理，生成/覆盖属于当前 dataset 的初始解 attention_probs.csv
+        update_heartbeat(task=f"推理: {dataset}")
         if not run_inference(dataset_path):
-            print(f"  [WARN] Inference failed, using baseline only")
+            print(f"  [WARN] 推理失败, 退回使用基线策略")
         
         for strategy in strategies:
             current_test += 1
@@ -241,6 +241,7 @@ def phase2_run_tests():
                 progress=progress
             )
             
+            # 步骤 2: 将 C++ 作为一个“单次任务执行器”进行调用，它会自动读取刚刚生成的当前 dataset 的结果文件
             cost = run_cpp_solver(dataset_path, strategy)
             
             if cost is not None:

@@ -1,79 +1,79 @@
 # run_experiments.ps1
-# Batch execution script for SVRAP experiments
-# Steps: Python Policy Network -> attention_probs.csv -> C++ Tabu Search
+# SVRAP 实验的批量执行脚本
+# 执行步骤: 针对每个数据集 -> 运行 Python 策略网络生成 attention_probs.csv -> 运行带参的 C++ 禁忌搜索单独读取该 CSV 进行求解
 
 $ErrorActionPreference = "Continue"
 
-# ================= Configuration =================
+# ================= 配置区 =================
 $DatasetDir = "formatted_dataset"
 $LogFile = "experiment_results.log"
 $Alpha = 7.0
 $PythonScript = "svrap_solver.py"
 $CppExe = ".\svrap.exe"
 
-# Ensure we use the python from the current environment if possible
+# 确保尽可能使用当前环境的 python
 $PythonExe = (Get-Command python).Source
-Write-Host "Using Python: $PythonExe"
+Write-Host "使用的 Python 解释器: $PythonExe"
 # =============================================
 
-# Check required files
+# 检查必要的文件和目录
 if (-not (Test-Path $DatasetDir)) {
-    Write-Error "Error: Dataset directory '$DatasetDir' not found."
+    Write-Error "错误: 找不到数据集目录 '$DatasetDir'。"
     exit 1
 }
 if (-not (Test-Path $PythonScript)) {
-    Write-Error "Error: Python script '$PythonScript' not found."
+    Write-Error "错误: 找不到 Python 脚本 '$PythonScript'。"
     exit 1
 }
 if (-not (Test-Path $CppExe)) {
-    Write-Error "Error: C++ executable '$CppExe' not found. Please compile first (make)."
+    Write-Error "错误: 找不到 C++ 可执行文件 '$CppExe'。请先编译 (make)。"
     exit 1
 }
 
-# Initialize log file
+# 初始化日志文件
 $StartTime = Get-Date
-"=== SVRAP Batch Experiments Started at $StartTime ===" | Out-File -FilePath $LogFile -Encoding utf8
+"=== SVRAP 批量实验开始于 $StartTime ===" | Out-File -FilePath $LogFile -Encoding utf8
 
-# Get all .txt dataset files
+# 获取所有 .txt 数据集文件
 $Datasets = Get-ChildItem -Path $DatasetDir -Filter "*.txt"
 
-Write-Host "Found $( $Datasets.Count ) datasets. Starting processing..."
-Write-Host "Logs will be written to: $LogFile"
+Write-Host "找到 $( $Datasets.Count ) 个数据集。开始处理..."
+Write-Host "日志将写入到: $LogFile"
 
 foreach ($File in $Datasets) {
     $DatasetPath = $File.FullName
     $DatasetName = $File.Name
     
     Write-Host "--------------------------------------------------"
-    Write-Host "Processing: $DatasetName"
+    Write-Host "正在处理: $DatasetName"
     
-    # Write separator to log
+    # 写入分隔符到日志
     "`n`n==================================================" | Out-File -FilePath $LogFile -Append -Encoding utf8
     "DATASET: $DatasetName" | Out-File -FilePath $LogFile -Append -Encoding utf8
     "TIME: $(Get-Date)" | Out-File -FilePath $LogFile -Append -Encoding utf8
     "==================================================" | Out-File -FilePath $LogFile -Append -Encoding utf8
 
-    # 1. Run Python (Train/Inference + Generate Initial Solution)
-    Write-Host "  [1/2] Running Python Policy Network..." -NoNewline
+    # 1. 运行 Python (训练/推理 + 覆盖生成当前数据集的初始解 CSV)
+    Write-Host "  [1/2] 正在运行 Python 策略网络..." -NoNewline
     
     "COMMAND: $PythonExe $PythonScript --dataset `"$DatasetPath`" --train" | Out-File -FilePath $LogFile -Append -Encoding utf8
     
-    # Run command, capture output, check status, THEN write to file.
+    # 运行命令，捕获输出，检查状态，然后写入日志
     $pyOutput = & $PythonExe $PythonScript --dataset "$DatasetPath" --train 2>&1
     $pyStatus = $LASTEXITCODE
     
     $pyOutput | Out-File -FilePath $LogFile -Append -Encoding utf8
     
     if ($pyStatus -eq 0) {
-        Write-Host " Done" -ForegroundColor Green
+        Write-Host " 完成" -ForegroundColor Green
     } else {
-        Write-Host " Failed (Exit Code: $pyStatus)" -ForegroundColor Red
+        Write-Host " 失败 (退出代码: $pyStatus)" -ForegroundColor Red
         "ERROR: Python script failed with exit code $pyStatus" | Out-File -FilePath $LogFile -Append -Encoding utf8
-        continue # Skip C++ if Python fails
+        continue # 如果 Python 失败，跳过 C++ 步骤
     }
 
-    # 2. Run C++ (Read Initial Solution + Search)
-    Write-Host "  [2/2] Running C++ Tabu Search..." -NoNewline
+    # 2. 运行 C++ (作为单次任务调用，带有当前数据集参数，读取刚生成的初始解进行搜索)
+    Write-Host "  [2/2] 正在运行 C++ 禁忌搜索..." -NoNewline
     
     "COMMAND: $CppExe $Alpha `"$DatasetPath`"" | Out-File -FilePath $LogFile -Append -Encoding utf8
     
@@ -84,9 +84,9 @@ foreach ($File in $Datasets) {
     $cppOutput | Out-File -FilePath $LogFile -Append -Encoding utf8
     
     if ($cppStatus -eq 0) {
-        Write-Host " Done" -ForegroundColor Green
+        Write-Host " 完成" -ForegroundColor Green
     } else {
-        Write-Host " Failed (Exit Code: $cppStatus)" -ForegroundColor Red
+        Write-Host " 失败 (退出代码: $cppStatus)" -ForegroundColor Red
         "ERROR: C++ executable failed with exit code $cppStatus" | Out-File -FilePath $LogFile -Append -Encoding utf8
     }
 }
@@ -94,6 +94,6 @@ foreach ($File in $Datasets) {
 $EndTime = Get-Date
 $Duration = $EndTime - $StartTime
 Write-Host "--------------------------------------------------"
-Write-Host "All experiments finished."
-Write-Host "Total Duration: $Duration"
-Write-Host "Detailed logs: $LogFile"
+Write-Host "所有实验完成。"
+Write-Host "总耗时: $Duration"
+Write-Host "详细日志: $LogFile"
