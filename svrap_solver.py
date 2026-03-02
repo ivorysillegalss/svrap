@@ -218,22 +218,24 @@ class SVRAPEnvironment:
 
 class EdgeBiasProjector(nn.Module):
     """
-    Projects scalar edge weights (Cost or Distance) into an attention bias.
-    Replaces the old GatedEdgeFusion to avoid mixing D and C too early.
+    Projects raw edge feature channels (D matrix and C matrix) directly into a single attention bias.
     """
     def __init__(self):
         super().__init__()
-        # Simple MLP to learn non-linear mapping from cost to attention penalty/boost
+        # Takes edge_feat (2 channels: D and C) and maps to a single bias value
         self.net = nn.Sequential(
-            nn.Linear(1, 16),
+            nn.Linear(2, 16),
             nn.ReLU(),
             nn.Linear(16, 1)
         )
 
-    def forward(self, edge_scalar):
-        # edge_scalar: (N, N)
-        x = edge_scalar.unsqueeze(-1) # (N, N, 1)
-        bias = self.net(x).squeeze(-1) # (N, N)
+    def forward(self, edge_feat):
+        # edge_feat: (1, N, N, 2)
+        # Squeeze batch if it's 1 for bias broadcast formatting if needed
+        # We'll just map the last dimension directly.
+        bias = self.net(edge_feat).squeeze(-1) # (1, N, N)
+        if bias.dim() == 3 and bias.size(0) == 1:
+            bias = bias.squeeze(0) # (N, N)
         return bias
 
 class ContextEncoderLayer(nn.Module):
@@ -259,7 +261,7 @@ class ContextEncoderLayer(nn.Module):
 
 class ContextEncoder(nn.Module):
     """
-    Standard Transformer Encoder Block that processes a specific context (Routing or Allocation).
+    Standard Transformer Encoder Block processing combined edge features.
     """
     def __init__(self, embed_dim, n_heads, num_layers=3):
         super().__init__()
@@ -268,13 +270,12 @@ class ContextEncoder(nn.Module):
             ContextEncoderLayer(embed_dim, n_heads) for _ in range(num_layers)
         ])
 
-    def forward(self, h, edge_matrix):
+    def forward(self, h, edge_feat):
         # h: (1, N, embed_dim)
-        # edge_matrix: (N, N) scalar edge features used for bias
+        # edge_feat: (1, N, N, 2)
         
-        # 1. Generate Attention Bias from specific edge type
-        # Independent projection for this specific context
-        attn_bias = self.edge_proj(edge_matrix) # (N, N)
+        # 1. Generate unified Attention Bias from edge features
+        attn_bias = self.edge_proj(edge_feat) # (N, N)
         
         # 2. Forward through multiple attention layers
         for layer in self.layers:
@@ -290,20 +291,8 @@ class SVRAPNetwork(nn.Module):
         # Initial Node embedding
         self.node_embed = nn.Linear(2, embed_dim)
         
-        # Dual-Stream Encoders (Decoupled Architecture)
-        
-        # Stream 1: Routing Context (Focuses on Connectivity/Tour Cost - C matrix)
-        self.routing_encoder = ContextEncoder(embed_dim, n_heads)
-        
-        # Stream 2: Allocation Context (Focuses on Proximity/Assignment Cost - D matrix)
-        self.alloc_encoder = ContextEncoder(embed_dim, n_heads)
-        
-        # Late Fusion Layer
-        # Concatenates both contexts and projects back to embedding dimension
-        self.fusion = nn.Sequential(
-            nn.Linear(2 * embed_dim, embed_dim),
-            nn.ReLU()
-        )
+        # Single Unified Encoder (No more Dual-Stream separating C and D)
+        self.encoder = ContextEncoder(embed_dim, n_heads)
         
         # Output heads (logits for ASSIGN, ROUTE, LOSS)
         self.classifier = nn.Linear(embed_dim, 3)
@@ -313,28 +302,14 @@ class SVRAPNetwork(nn.Module):
         # edge_feat: (1, N, N, 2) -> Contains (d_matrix, c_matrix)
         
         # 1. Base Node Embeddings
-        h_base = self.node_embed(x) # (1, N, embed_dim)
+        h = self.node_embed(x) # (1, N, embed_dim)
         
-        # 2. Separate Edge Features
-        # edge_feat is stacked as [d_matrix, c_matrix] in run_pipeline
-        # Index 0 is Allocation (d), Index 1 is Routing (c)
-        d_matrix = edge_feat[0, :, :, 0] # (N, N)
-        c_matrix = edge_feat[0, :, :, 1] # (N, N)
+        # 2. Unified Context Processing
+        # Pass base embeddings and raw 2-channel edge features directly
+        h = self.encoder(h, edge_feat) # (1, N, embed_dim)
         
-        # 3. Independent Stream Processing
-        # "Routing Vector" generation: How "routable" is this node?
-        h_route = self.routing_encoder(h_base, c_matrix) # (1, N, embed_dim)
-        
-        # "Allocation Vector" generation: How good is this node at covering others?
-        h_alloc = self.alloc_encoder(h_base, d_matrix) # (1, N, embed_dim)
-        
-        # 4. Late Fusion
-        # Now we combine the "expert opinions"
-        h_concat = torch.cat([h_route, h_alloc], dim=-1) # (1, N, 2*embed_dim)
-        h_fused = self.fusion(h_concat) # (1, N, embed_dim)
-        
-        # 5. Classification
-        logits = self.classifier(h_fused) # (1, N, 3)
+        # 3. Final Classification
+        logits = self.classifier(h) # (1, N, 3)
         return logits
 
 # ==========================================
