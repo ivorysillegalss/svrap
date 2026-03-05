@@ -7,7 +7,7 @@
 ### 算法核心组件
 | 组件 | 描述 | 对应代码 |
 |------|------|----------|
-| **策略网络** | Dual-Stream Transformer预测节点状态概率 | `svrap_solver.py` |
+| **策略网络** | Bi-directional Cross-Attention Transformer预测节点状态概率 | `svrap_solver.py` |
 | **骨干初始化** | 基于P(route)概率构建初始在途节点集 | `SVRAPNetwork` |
 | **熵引导搜索** | 高熵节点优先探索机制 | `entropy_weight` 参数 |
 | **KNN加速** | K近邻邻域裁剪 | `k_neighbors` 参数 |

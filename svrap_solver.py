@@ -218,24 +218,21 @@ class SVRAPEnvironment:
 
 class EdgeBiasProjector(nn.Module):
     """
-    Projects raw edge feature channels (D matrix and C matrix) directly into a single attention bias.
+    Projects a single edge feature matrix (D or C) into an attention bias.
     """
     def __init__(self):
         super().__init__()
-        # Takes edge_feat (2 channels: D and C) and maps to a single bias value
+        # Takes edge scalar (1 channel) and maps to a single bias value
         self.net = nn.Sequential(
-            nn.Linear(2, 16),
+            nn.Linear(1, 16),
             nn.ReLU(),
             nn.Linear(16, 1)
         )
 
-    def forward(self, edge_feat):
-        # edge_feat: (1, N, N, 2)
-        # Squeeze batch if it's 1 for bias broadcast formatting if needed
-        # We'll just map the last dimension directly.
-        bias = self.net(edge_feat).squeeze(-1) # (1, N, N)
-        if bias.dim() == 3 and bias.size(0) == 1:
-            bias = bias.squeeze(0) # (N, N)
+    def forward(self, edge_scalar):
+        # edge_scalar: (N, N)
+        x = edge_scalar.unsqueeze(-1) # (N, N, 1)
+        bias = self.net(x).squeeze(-1) # (N, N)
         return bias
 
 class ContextEncoderLayer(nn.Module):
@@ -261,7 +258,7 @@ class ContextEncoderLayer(nn.Module):
 
 class ContextEncoder(nn.Module):
     """
-    Standard Transformer Encoder Block processing combined edge features.
+    Standard Transformer Encoder Block processing a single edge feature view.
     """
     def __init__(self, embed_dim, n_heads, num_layers=3):
         super().__init__()
@@ -270,17 +267,43 @@ class ContextEncoder(nn.Module):
             ContextEncoderLayer(embed_dim, n_heads) for _ in range(num_layers)
         ])
 
-    def forward(self, h, edge_feat):
+    def forward(self, h, edge_matrix):
         # h: (1, N, embed_dim)
-        # edge_feat: (1, N, N, 2)
+        # edge_matrix: (N, N) single scalar edge features used for bias
         
-        # 1. Generate unified Attention Bias from edge features
-        attn_bias = self.edge_proj(edge_feat) # (N, N)
+        # 1. Generate Attention Bias from specific edge type
+        attn_bias = self.edge_proj(edge_matrix) # (N, N)
         
         # 2. Forward through multiple attention layers
         for layer in self.layers:
             h = layer(h, attn_bias)
             
+        return h
+
+class RouteToAllocCrossAttention(nn.Module):
+    """
+    Cross-Attention mechanism: Route query Alloc
+    Q: H_route, K: H_alloc, V: H_route
+    """
+    def __init__(self, embed_dim, n_heads):
+        super().__init__()
+        self.cross_mha = nn.MultiheadAttention(embed_dim, n_heads, batch_first=True)
+        self.ln1 = nn.LayerNorm(embed_dim)
+        
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),
+            nn.ReLU(),
+            nn.Linear(4 * embed_dim, embed_dim)
+        )
+        self.ln2 = nn.LayerNorm(embed_dim)
+
+    def forward(self, h_route, h_alloc):
+        # According to the plan: Q=h_route, K=h_alloc, V=h_route
+        attn_out, _ = self.cross_mha(query=h_route, key=h_alloc, value=h_route)
+        h = self.ln1(h_route + attn_out)
+        
+        ffn_out = self.ffn(h)
+        h = self.ln2(h + ffn_out)
         return h
 
 class SVRAPNetwork(nn.Module):
@@ -291,8 +314,12 @@ class SVRAPNetwork(nn.Module):
         # Initial Node embedding
         self.node_embed = nn.Linear(2, embed_dim)
         
-        # Single Unified Encoder (No more Dual-Stream separating C and D)
-        self.encoder = ContextEncoder(embed_dim, n_heads)
+        # Dual-Stream Encoders (Restored to separate C and D)
+        self.routing_encoder = ContextEncoder(embed_dim, n_heads)
+        self.alloc_encoder = ContextEncoder(embed_dim, n_heads)
+        
+        # Cross-Attention Layer (Route -> Alloc)
+        self.cross_attn_r_to_a = RouteToAllocCrossAttention(embed_dim, n_heads)
         
         # Output heads (logits for ASSIGN, ROUTE, LOSS)
         self.classifier = nn.Linear(embed_dim, 3)
@@ -301,15 +328,22 @@ class SVRAPNetwork(nn.Module):
         # x: (1, N, 2)
         # edge_feat: (1, N, N, 2) -> Contains (d_matrix, c_matrix)
         
+        # 0. Separate Edge Features
+        d_matrix = edge_feat[0, :, :, 0] # (N, N)
+        c_matrix = edge_feat[0, :, :, 1] # (N, N)
+        
         # 1. Base Node Embeddings
-        h = self.node_embed(x) # (1, N, embed_dim)
+        h_base = self.node_embed(x) # (1, N, embed_dim)
         
-        # 2. Unified Context Processing
-        # Pass base embeddings and raw 2-channel edge features directly
-        h = self.encoder(h, edge_feat) # (1, N, embed_dim)
+        # 2. Independent Stream Processing
+        h_route = self.routing_encoder(h_base, c_matrix) # (1, N, embed_dim)
+        h_alloc = self.alloc_encoder(h_base, d_matrix) # (1, N, embed_dim)
         
-        # 3. Final Classification
-        logits = self.classifier(h) # (1, N, 3)
+        # 3. Cross-Attention Phase 1: Route to Alloc
+        h_fused = self.cross_attn_r_to_a(h_route, h_alloc) # (1, N, embed_dim)
+        
+        # 4. Final Classification
+        logits = self.classifier(h_fused) # (1, N, 3)
         return logits
 
 # ==========================================
@@ -327,8 +361,12 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     env = SVRAPEnvironment(dataset_path)
     
     # Prepare Edge Features (d_ij, c_ij)
-    edge_feat = torch.stack([env.d_matrix, env.c_matrix], dim=-1) # (N, N, 2)
-    edge_feat = edge_feat / 100.0 # Simple scaling
+    d_max = env.d_matrix.max()
+    c_max = env.c_matrix.max()
+    d_norm = env.d_matrix / d_max if d_max > 0 else env.d_matrix
+    c_norm = env.c_matrix / c_max if c_max > 0 else env.c_matrix
+    
+    edge_feat = torch.stack([d_norm, c_norm], dim=-1) # (N, N, 2)
     edge_feat = edge_feat.unsqueeze(0) # (1, N, N, 2)
     
     node_feat = env.tensor_locs.unsqueeze(0) # (1, N, 2)
@@ -351,10 +389,6 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         best_actions = None
         no_improve_steps = 0
         
-        # Baseline for REINFORCE
-        avg_cost = 0.0
-        alpha_baseline = 0.9
-        
         node_feat = node_feat.to(device)
         edge_feat = edge_feat.to(device)
         
@@ -370,23 +404,22 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             dist = Categorical(probs)
             actions = dist.sample() # (N,)
             
-            # Evaluate
+            # Evaluate sampled actions
             cost, _ = env.evaluate_solution(actions)
+            
+            # Evaluate greedy rollout baseline
+            with torch.no_grad():
+                greedy_actions = torch.argmax(logits, dim=-1)
+                baseline_cost, _ = env.evaluate_solution(greedy_actions)
             
             # REINFORCE Loss
             log_probs = dist.log_prob(actions)
             
-            if epoch == 0:
-                avg_cost = cost
-            
-            advantage = cost - avg_cost
+            advantage = cost - baseline_cost
             loss = (log_probs * advantage).mean()
             
             loss.backward()
             optimizer.step()
-            
-            # Update baseline
-            avg_cost = alpha_baseline * avg_cost + (1 - alpha_baseline) * cost
             
             # Track Best
             if cost < best_cost:
@@ -404,7 +437,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 no_improve_steps += 1
             
             if epoch % 100 == 0:
-                print(f"Epoch {epoch}: Cost {cost:.2f}, Best {best_cost:.2f}, Avg {avg_cost:.2f}")
+                print(f"Epoch {epoch}: Cost {cost:.2f}, Best {best_cost:.2f}, Baseline {baseline_cost:.2f}")
             
             # Early Stopping
             if epoch > SVRAPConfig.MIN_EPOCHS and no_improve_steps >= SVRAPConfig.EARLY_STOP_PATIENCE:
