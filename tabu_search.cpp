@@ -25,7 +25,7 @@
 // 假设 Point 结构体中包含 int x 和 int y
 struct PointHash {
   size_t operator()(const Point &p) const {
-    return std::hash<int>()(p.x) ^ (std::hash<int>()(p.y) << 1);
+    return std::hash<size_t>()(p.id);
   }
 };
 
@@ -86,9 +86,9 @@ TabuSearch::TabuSearch(
     const std::vector<Point> &locations,
     const std::vector<std::vector<double>> &distance,
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<Point> &route, const std::double_t &cost,
-    const std::map<std::pair<int, int>, double> &point_probs,
+    const std::map<size_t, double> &point_probs,
     StrategyConfig config)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route),
@@ -130,11 +130,11 @@ TabuSearch::TabuSearch(
     }
   }
 }
-std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>,
+std::tuple<std::vector<Point>, std::map<size_t, VertexInfo>,
            double, std::vector<Point>>
 TabuSearch ::operation_style(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &iter_dic,
+    const std::map<size_t, VertexInfo> &iter_dic,
     double base_allocation_cost) {
 
   // 三个操作中随机选择一个
@@ -155,7 +155,7 @@ TabuSearch ::operation_style(
     std::vector<Point> candidates;
     for (const auto &kv : iter_dic) {
       if (kv.second.status == "N") {
-        candidates.push_back({kv.first.first, kv.first.second});
+        candidates.push_back(locations_[kv.first]);
       }
     }
 
@@ -169,10 +169,10 @@ TabuSearch ::operation_style(
         0, static_cast<int>(candidates.size()) - 1)(rng)];
 
     // 更新 Map 状态
-    add_dic[{add_vertice.x, add_vertice.y}].status = "Y";
+    add_dic[add_vertice.id].status = "Y";
 
     // 更新其他 Off-tour 点的最近邻（保守实现，交给成本函数兜底）
-    std::pair<int, int> add_key = {add_vertice.x, add_vertice.y};
+    size_t add_key = add_vertice.id;
     size_t add_idx = add_dic.at(add_key).index;
 
     for (auto &kv : add_dic) {
@@ -236,7 +236,7 @@ TabuSearch ::operation_style(
         }
 
         for (size_t i = 0; i < route.size(); ++i) {
-            size_t u_idx = iter_dic.at({route[i].x, route[i].y}).index;
+            size_t u_idx = iter_dic.at(route[i].id).index;
             if (is_neighbor[u_idx]) {
                 // If route[i] is a neighbor, check insertion before (i) and after (i+1)
                 candidate_indices.push_back(i);
@@ -290,7 +290,7 @@ TabuSearch ::operation_style(
     drop_route.erase(drop_route.begin() + drop_index);
 
     // 更新 Map
-    VertexInfo &info = drop_dic[{d_vertice.x, d_vertice.y}];
+    VertexInfo &info = drop_dic[d_vertice.id];
     info.status = "N";
 
     // 其余最近邻信息交由成本函数统一处理
@@ -327,7 +327,7 @@ TabuSearch ::operation_style(
 // 辅助函数：插入最佳位置
 std::vector<Point>
 best_insert_position(const Point &p, const std::vector<Point> &route,
-                     const std::map<std::pair<int, int>, VertexInfo> &dic,
+                     const std::map<size_t, VertexInfo> &dic,
                      const std::vector<std::vector<double>> &distance) {
   std::vector<Point> best_route = route;
   double best_cost = std::numeric_limits<double>::max();
@@ -356,7 +356,7 @@ best_insert_position(const Point &p, const std::vector<Point> &route,
 std::tuple<std::vector<Point>, double>
 TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
                            const std::vector<Point> &new_champion,
-                           std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                           std::map<size_t, VertexInfo> iter_dic,
                            std::vector<OpKey> &relink_moves) {
   // 如果缺少前一个 Champion，无法进行路径重连
   if (prev_champion.empty() || new_champion.empty()) {
@@ -396,7 +396,7 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
   vertice_on_probability.reserve(state_change.size());
 
   for (const Point &p : state_change) {
-    std::pair<int, int> key = {p.x, p.y};
+    size_t key = p.id;
     int on_cnt = 0;
     int off_cnt = 0;
     auto it_on = champion_on_count_.find(key);
@@ -450,7 +450,7 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
       // 该点最终要在路径中 → 插入到当前 temp_solution 成本增加最小的位置
       temp_solution =
           best_insert_position(p, temp_solution, iter_dic, distance_);
-      iter_dic.at({p.x, p.y}).status = "Y"; // 标记为已在路径上
+      iter_dic.at(p.id).status = "Y"; // 标记为已在路径上
       // 记录一次 ADD 操作，用于将其逆操作 (DROP) 设为 Tabu
       std::vector<Point> op_vec = {p};
       OpKey key = op_vec;
@@ -462,7 +462,7 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
           temp_solution.end());
       // Map 状态更新，但 Off-tour best_cost/best_vertex
       // 不在这里更新，依赖最终的 GreedyLocalSearch
-      iter_dic.at({p.x, p.y}).status = "N"; // 标记为已在路外
+      iter_dic.at(p.id).status = "N"; // 标记为已在路外
       // 记录一次 DROP 操作，用于将其逆操作 (ADD) 设为 Tabu
       std::vector<Point> op_vec = {p};
       OpKey key = op_vec;
@@ -482,9 +482,9 @@ TabuSearch::path_relinking(const std::vector<Point> &prev_champion,
   return {temp_solution, relinkcost};
 }
 
-std::tuple<std::vector<Point>, std::map<std::pair<int, int>, VertexInfo>>
+std::tuple<std::vector<Point>, std::map<size_t, VertexInfo>>
 TabuSearch::diversication(const std::vector<Point> &champion_route,
-                          std::map<std::pair<int, int>, VertexInfo> iter_dic,
+                          std::map<size_t, VertexInfo> iter_dic,
                           std::vector<OpKey> &diversification_moves) {
   auto current_solution = champion_route;
 
@@ -507,7 +507,7 @@ TabuSearch::diversication(const std::vector<Point> &champion_route,
   candidate_vertices.reserve(locations_.size());
 
   for (const auto &loc : locations_) {
-    std::pair<int, int> key = {loc.x, loc.y};
+    size_t key = loc.id;
     int on_cnt = 0;
     int off_cnt = 0;
     auto it_on = champion_on_count_.find(key);
@@ -572,7 +572,7 @@ TabuSearch::diversication(const std::vector<Point> &champion_route,
   int n = static_cast<int>(locations_.size());
   int diversify_moves = n / 2;
 
-  auto key_of = [](const Point &p) { return std::pair{p.x, p.y}; };
+  auto key_of = [](const Point &p) { return p.id; };
 
   for (int k = 0; k < diversify_moves && k < (int)candidate_vertices.size();
        ++k) {
@@ -614,8 +614,8 @@ TabuSearch::diversication(const std::vector<Point> &champion_route,
     Point best_pred{};
 
     for (const Point &on : current_solution) {
-      if (iter_dic.at({on.x, on.y}).status == "Y") {
-        size_t i = iter_dic.at({on.x, on.y}).index;
+      if (iter_dic.at(on.id).status == "Y") {
+        size_t i = iter_dic.at(on.id).index;
         size_t j = info.index;
         double cost = distance_[i][j];
         if (cost < best_cost) {
@@ -640,7 +640,7 @@ void TabuSearch::update_champion_frequencies(
                                                  champion_route.end());
 
   for (const auto &loc : locations_) {
-    std::pair<int, int> key = {loc.x, loc.y};
+    size_t key = loc.id;
     if (route_set.count(loc) > 0) {
       champion_on_count_[key]++;
     } else {
@@ -684,7 +684,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
     // Added adjusted_cost as the 5th element
     using Candidate =
         std::tuple<double, std::vector<Point>,
-                   std::map<std::pair<int, int>, VertexInfo>, OpKey, double>;
+                   std::map<size_t, VertexInfo>, OpKey, double>;
     std::vector<Candidate> candidates;
 
     int valid_neighbors = 0;
@@ -723,7 +723,7 @@ void TabuSearch::search(int T, int Q, int TBL) {
       int total_points = 0;
       for (const auto &p : n_op) {
         total_points++;
-        if (current_dic.at({p.x, p.y}).is_high_entropy) {
+        if (current_dic.at(p.id).is_high_entropy) {
           he_count++;
         }
       }

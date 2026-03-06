@@ -31,15 +31,17 @@ extern double ALPHA;
 
 // 定义 Point 结构体
 struct Point {
+  size_t id;
   int x;
   int y;
 
-  Point() : x(0), y(0) {}
+  Point() : id(-1), x(0), y(0) {}
 
-  Point(int x_, int y_) : x(x_), y(y_) {}
+  Point(size_t id_, int x_, int y_) : id(id_), x(x_), y(y_) {}
+  Point(int x_, int y_) : id(-1), x(x_), y(y_) {}
 
   bool operator==(const Point &other) const {
-    return x == other.x && y == other.y;
+    return id == other.id;
   }
 
   bool operator!=(const Point &other) const {
@@ -104,7 +106,7 @@ void build_vertex_map(const std::vector<Point> &locations,
                       const std::vector<Point> &on_vertices,
                       const std::vector<Point> &off_vertices,
                       const std::vector<std::vector<double>> &distance,
-                      std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-                      const std::set<std::pair<int, int>> &high_entropy_points);
+                      std::map<size_t, VertexInfo> &vertex_map,
+                      const std::set<size_t> &high_entropy_points);
 
 #endif // TSP_COMMON_H

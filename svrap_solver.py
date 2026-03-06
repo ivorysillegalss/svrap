@@ -392,6 +392,8 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         node_feat = node_feat.to(device)
         edge_feat = edge_feat.to(device)
         
+        training_history = []
+        
         for epoch in range(SVRAPConfig.EPOCHS):
             model.train()
             optimizer.zero_grad()
@@ -436,6 +438,8 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             else:
                 no_improve_steps += 1
             
+            training_history.append((epoch, cost, baseline_cost, best_cost))
+            
             if epoch % 100 == 0:
                 print(f"Epoch {epoch}: Cost {cost:.2f}, Best {best_cost:.2f}, Baseline {baseline_cost:.2f}")
             
@@ -445,6 +449,14 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 break
                 
         print(f"Training finished. Best Cost: {best_cost:.2f}")
+        
+        # Save Training History
+        history_path = f"training_log_{dataset_name}.csv"
+        with open(history_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Epoch', 'Cost', 'Baseline', 'Best'])
+            writer.writerows(training_history)
+        print(f"Saved training history to {history_path}")
 
     # 4. Inference & Export
     if os.path.exists(model_path):

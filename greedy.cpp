@@ -19,9 +19,9 @@
 void calculate_nearest_cost(
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
     const std::vector<std::vector<double>> &distance,
-    std::map<std::pair<int, int>, VertexInfo> &vertex_map) {
+    std::map<size_t, VertexInfo> &vertex_map) {
   for (const auto &off_point : offtour) {
-    std::pair<int, int> off_key = {off_point.x, off_point.y};
+    size_t off_key = off_point.id;
     // TODO 使用find方法改进
     size_t off_index = vertex_map[off_key].index;
 
@@ -29,7 +29,7 @@ void calculate_nearest_cost(
     Point best_vertex = {0, 0};
 
     for (const auto &on_point : ontour) {
-      std::pair<int, int> on_key = {on_point.x, on_point.y};
+      size_t on_key = on_point.id;
       size_t on_index = vertex_map[on_key].index;
       double cost = distance[off_index][on_index];
       if (cost < min_cost) {
@@ -45,7 +45,7 @@ void calculate_nearest_cost(
 std::vector<Point>
 nearest_neighbour(const std::vector<Point> &on_vertices,
                   const std::vector<std::vector<double>> &distance,
-                  const std::map<std::pair<int, int>, VertexInfo> &vertex_map) {
+                  const std::map<size_t, VertexInfo> &vertex_map) {
   // 数据合法性校验
   if (on_vertices.empty())
     throw std::invalid_argument("Data at on_vertices null");
@@ -67,14 +67,13 @@ nearest_neighbour(const std::vector<Point> &on_vertices,
   while (!unvisited.empty()) {
     // 返回最后一个元素的引用
     Point select_vertex = route.back();
-    std::pair<int, int> select_key = {select_vertex.x, select_vertex.y};
+    size_t select_key = select_vertex.id;
     size_t select_index;
     try {
       select_index = vertex_map.at(select_key).index;
     } catch (const std::out_of_range &e) {
       throw std::runtime_error("can't find point (" +
-                               std::to_string(select_key.first) + ", " +
-                               std::to_string(select_key.second) + ") index");
+                               std::to_string(select_key) + ") index");
     }
 
     // 枚举 but贪心寻找最小花费
@@ -84,14 +83,13 @@ nearest_neighbour(const std::vector<Point> &on_vertices,
 
     // 遍历每个点的花费
     for (size_t i = 0; i < unvisited.size(); ++i) {
-      std::pair<int, int> other_key = {unvisited[i].x, unvisited[i].y};
+      size_t other_key = unvisited[i].id;
       size_t other_index;
       try {
         other_index = vertex_map.at(other_key).index;
       } catch (const std::out_of_range &e) {
         throw std::runtime_error("can't find point (" +
-                                 std::to_string(other_key.first) + ", " +
-                                 std::to_string(other_key.second) + ") index");
+                                 std::to_string(other_key) + ") index");
       }
 
       // 找到更优消费 更新最小值
@@ -116,14 +114,14 @@ GreedyLocalSearch::GreedyLocalSearch(
     const std::vector<Point> &locations,
     const std::vector<std::vector<double>> &distance,
     const std::vector<Point> &ontour, const std::vector<Point> &offtour,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<Point> &route)
     : locations_(locations), distance_(distance), ontour_(ontour),
       offtour_(offtour), vertex_map_(vertex_map), route_(route) {}
 
 GreedyLocalSearch::GreedyLocalSearch(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<std::vector<double>> &distance)
     : distance_(distance), vertex_map_(vertex_map), route_(route) {}
 
@@ -190,7 +188,7 @@ void GreedyLocalSearch::twoopt(const Point &vertex1, const Point &vertex2) {
 // min( (10-a)*min_i l_ij, λ_isol * D_j ) 实现这一部分。
 double GreedyLocalSearch::compute_routing_cost(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<std::vector<double>> &distance) {
   if (route.empty()) return 0.0;
 
@@ -199,8 +197,8 @@ double GreedyLocalSearch::compute_routing_cost(
   double routing_cost = 0.0;
 
   for (size_t i = 0; i + 1 < route.size(); ++i) {
-    std::pair<int, int> key1 = {route[i].x, route[i].y};
-    std::pair<int, int> key2 = {route[i + 1].x, route[i + 1].y};
+    size_t key1 = route[i].id;
+    size_t key2 = route[i + 1].id;
     size_t index1, index2;
     try {
       index1 = vertex_map.at(key1).index;
@@ -212,8 +210,8 @@ double GreedyLocalSearch::compute_routing_cost(
   }
 
   if (route.size() > 1) {
-    std::pair<int, int> key_first = {route.front().x, route.front().y};
-    std::pair<int, int> key_last = {route.back().x, route.back().y};
+    size_t key_first = route.front().id;
+    size_t key_last = route.back().id;
     size_t idx_first = vertex_map.at(key_first).index;
     size_t idx_last = vertex_map.at(key_last).index;
     routing_cost += lambda_tour * a * distance[idx_last][idx_first];
@@ -223,7 +221,7 @@ double GreedyLocalSearch::compute_routing_cost(
 
 double GreedyLocalSearch::compute_allocation_cost(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<std::vector<double>> &distance) {
   if (route.empty()) return std::numeric_limits<double>::max();
 
@@ -236,7 +234,7 @@ double GreedyLocalSearch::compute_allocation_cost(
   std::vector<size_t> route_indices;
   route_indices.reserve(route.size());
   for (const auto &p : route) {
-    std::pair<int, int> key = {p.x, p.y};
+    size_t key = p.id;
     auto it = vertex_map.find(key);
     if (it != vertex_map.end()) {
       route_indices.push_back(it->second.index);
@@ -282,7 +280,7 @@ double GreedyLocalSearch::compute_allocation_cost(
 
 double GreedyLocalSearch::compute_cost(
     const std::vector<Point> &route,
-    const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+    const std::map<size_t, VertexInfo> &vertex_map,
     const std::vector<std::vector<double>> &distance) {
   return compute_routing_cost(route, vertex_map, distance) + 
          compute_allocation_cost(route, vertex_map, distance);
@@ -299,13 +297,11 @@ double GreedyLocalSearch::tabu_cacl_cost() {
 
 void GreedyLocalSearch::update_vertex_map() {
   vertex_map_.clear();
-  std::map<std::pair<int, int>, size_t> point_to_index;
-  for (size_t i = 0; i < locations_.size(); ++i) {
-    point_to_index[{locations_[i].x, locations_[i].y}] = i;
-  }
+  
+
 
   for (const auto &point : locations_) {
-    std::pair<int, int> key = {point.x, point.y};
+    size_t key = point.id;
     bool on_route =
         std::find(ontour_.begin(), ontour_.end(), point) != ontour_.end();
 
@@ -316,7 +312,7 @@ void GreedyLocalSearch::update_vertex_map() {
     if (old_it != vertex_map_.end()) {
       iso_cost = old_it->second.isolation_cost;
     } else {
-      auto it_iso = ISOLATION_COSTS.find(key);
+      auto it_iso = ISOLATION_COSTS.find({point.x, point.y});
       if (it_iso != ISOLATION_COSTS.end()) {
         iso_cost = it_iso->second;
       }
@@ -324,22 +320,22 @@ void GreedyLocalSearch::update_vertex_map() {
 
     if (on_route) {
       vertex_map_[key] =
-          VertexInfo(point_to_index[key], "Y", {0, 0}, 0.0, iso_cost);
+          VertexInfo(key, "Y", {0, 0}, 0.0, iso_cost);
     } else {
       vertex_map_[key] =
-          VertexInfo(point_to_index[key], "N", {0, 0}, 0.0, iso_cost);
+          VertexInfo(key, "N", {0, 0}, 0.0, iso_cost);
     }
   }
 
   for (const auto &off_point : offtour_) {
-    std::pair<int, int> off_key = {off_point.x, off_point.y};
+    size_t off_key = off_point.id;
     size_t off_index = vertex_map_.at(off_key).index;
 
     double min_cost = std::numeric_limits<double>::max();
     Point best_vertex = {0, 0};
 
     for (const auto &on_point : ontour_) {
-      std::pair<int, int> on_key = {on_point.x, on_point.y};
+      size_t on_key = on_point.id;
       size_t on_index = vertex_map_.at(on_key).index;
       double cost = distance_[off_index][on_index];
       if (cost < min_cost) {
@@ -363,7 +359,7 @@ double GreedyLocalSearch::search() {
     if (std::find(ontour_.begin(), ontour_.end(), vl) != ontour_.end()) {
       std::vector<double> cost_list;
       std::vector<std::vector<Point>> routes;
-      std::vector<std::map<std::pair<int, int>, VertexInfo>> dicts;
+      std::vector<std::map<size_t, VertexInfo>> dicts;
 
       // 执行删除操作
       std::vector<Point> drop_route = route_;
@@ -375,7 +371,7 @@ double GreedyLocalSearch::search() {
         if (it != drop_route.end()) {
           drop_route.erase(it);
         }
-        drop_dict[{vl.x, vl.y}].status = "N";
+        drop_dict[vl.id].status = "N";
 
         // 重新计算对应的cost 决定当前是否替换最优解
         for (auto &entry : drop_dict) {
@@ -384,7 +380,7 @@ double GreedyLocalSearch::search() {
             double min_cost = std::numeric_limits<double>::max();
             Point best_vertex = {0, 0};
             for (const auto &on_point : drop_route) {
-              std::pair<int, int> on_key = {on_point.x, on_point.y};
+              size_t on_key = on_point.id;
               size_t on_index = drop_dict.at(on_key).index;
               double cost = distance_[off_index][on_index];
               if (cost < min_cost) {
@@ -469,10 +465,10 @@ double GreedyLocalSearch::search() {
              offtour_.end()) {
       std::vector<double> cost_list;
       std::vector<std::vector<Point>> routes;
-      std::vector<std::map<std::pair<int, int>, VertexInfo>> dicts;
+      std::vector<std::map<size_t, VertexInfo>> dicts;
 
       auto add_dict = vertex_map_;
-      add_dict[{vl.x, vl.y}].status = "Y";
+      add_dict[vl.id].status = "Y";
       std::vector<Point> temp_ontour = ontour_;
       temp_ontour.push_back(vl);
 
@@ -482,7 +478,7 @@ double GreedyLocalSearch::search() {
           double min_cost = std::numeric_limits<double>::max();
           Point best_vertex = {0, 0};
           for (const auto &on_point : temp_ontour) {
-            std::pair<int, int> on_key = {on_point.x, on_point.y};
+            size_t on_key = on_point.id;
             size_t on_index = add_dict.at(on_key).index;
             double cost = distance_[off_index][on_index];
             if (cost < min_cost) {

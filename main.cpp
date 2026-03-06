@@ -21,7 +21,7 @@
 GreedyLocalSearch
 greedy_local_search(std::vector<Point> ontour, std::vector<Point> offtour,
                     std::vector<std::vector<double>> distance,
-                    std::map<std::pair<int, int>, VertexInfo> vertex_map,
+                    std::map<size_t, VertexInfo> vertex_map,
                     std::vector<Point> locations) {
   // 对于每个 off_vertice 中的点，计算它到所有
   // on_vertice中点的距离（使用之前的 distance 矩阵）。
@@ -51,9 +51,9 @@ TabuSearch
 tabu_search(const std::vector<Point> &locations,
             const std::vector<std::vector<double>> &distance,
             const std::vector<Point> &ontour, const std::vector<Point> &offtour,
-            const std::map<std::pair<int, int>, VertexInfo> &vertex_map,
+            const std::map<size_t, VertexInfo> &vertex_map,
             const std::vector<Point> &route, const std::double_t cost,
-            const std::map<std::pair<int, int>, double> &point_probs = {},
+            const std::map<size_t, double> &point_probs = {},
             StrategyConfig config = StrategyConfig()) {
   // TODO
   TabuSearch solver(locations, distance, ontour, offtour, vertex_map, route,
@@ -202,12 +202,17 @@ int main(int argc, char **argv) {
         read_attention_probs("attention_probs.csv", probs);
 
         // 构建概率映射表，供 Tabu Search 多样化使用
-        std::map<std::pair<int, int>, double> point_probs_map;
+        std::map<size_t, double> point_probs_map;
         if (config.use_neural_init && !probs.empty()) {
-             for (const auto& pp : probs) {
-                 point_probs_map[{pp.x, pp.y}] = pp.p_route;
+             for (const auto& point : locations) {
+                 auto it = std::find_if(probs.begin(), probs.end(), [&point](const PointProb& pp) {
+                     return pp.x == point.x && pp.y == point.y;
+                 });
+                 if (it != probs.end()) {
+                     point_probs_map[point.id] = it->p_route;
+                 }
              }
-        }
+         }
 
         bool used_python_backbone = false;
         // 简单的校验：如果 probs 数据量足够且能匹配到当前 locations
@@ -226,17 +231,18 @@ int main(int argc, char **argv) {
           for (const auto &pp : probs) {
             if (backbone.size() >= K)
               break;
-            Point p(pp.x, pp.y);
             // 确认该点确实在当前 locations 中
+            Point true_p;
             bool found = false;
             for (const auto &loc : locations) {
-              if (loc.x == p.x && loc.y == p.y) {
-                found = true;
-                break;
-              }
+                if (loc.x == pp.x && loc.y == pp.y) {
+                    found = true;
+                    true_p = loc;
+                    break;
+                }
             }
             if (found) {
-              backbone.push_back(p);
+                backbone.push_back(true_p);
             }
           }
 
@@ -248,7 +254,7 @@ int main(int argc, char **argv) {
             for (const auto &loc : locations) {
               bool is_backbone = false;
               for (const auto &b : backbone) {
-                if (b.x == loc.x && b.y == loc.y) {
+                if (b.id == loc.id) {
                   is_backbone = true;
                   break;
                 }
@@ -274,18 +280,20 @@ int main(int argc, char **argv) {
             << std::endl;
 
         // 构建点信息集
-        std::map<std::pair<int, int>, VertexInfo> vertex_map;
+        std::map<size_t, VertexInfo> vertex_map;
         
         // Calculate entropy and identify high entropy points
-        std::set<std::pair<int, int>> high_entropy_points;
+        std::set<size_t> high_entropy_points;
         if (config.use_entropy && !probs.empty()) {
-            std::vector<std::pair<double, std::pair<int, int>>> entropies;
+            std::vector<std::pair<double, size_t>> entropies;
             for (const auto& pp : probs) {
                 // Check if point belongs to current instance
+                size_t p_id = -1;
                 bool found = false;
                 for (const auto& loc : locations) {
                     if (loc.x == pp.x && loc.y == pp.y) {
                         found = true;
+                        p_id = loc.id;
                         break;
                     }
                 }
@@ -295,7 +303,7 @@ int main(int argc, char **argv) {
                 if (pp.p_assign > 1e-9) h -= pp.p_assign * std::log(pp.p_assign);
                 if (pp.p_route > 1e-9) h -= pp.p_route * std::log(pp.p_route);
                 if (pp.p_loss > 1e-9) h -= pp.p_loss * std::log(pp.p_loss);
-                entropies.push_back({h, {pp.x, pp.y}});
+                entropies.push_back({h, p_id});
             }
             
             if (!entropies.empty()) {

@@ -35,7 +35,7 @@ void read_coordinates(const std::string &filename,
   // 依次读取文件每行内容
   std::string line;
   int line_number = 0;
-  std::set<std::pair<int, int>> seen_coords;
+  
 
   while (std::getline(file, line)) {
     ++line_number;
@@ -56,13 +56,10 @@ void read_coordinates(const std::string &filename,
       int x = static_cast<int>(x_d);
       int y = static_cast<int>(y_d);
 
-      // Handle duplicates by perturbing coordinates
-      while (seen_coords.count({x, y})) {
-        y++; // Simple perturbation strategy
-      }
-      seen_coords.insert({x, y});
+      
 
       Point p;
+      p.id = locations.size();
       p.x = x;
       p.y = y;
       locations.push_back(p);
@@ -218,19 +215,19 @@ void build_vertex_map(const std::vector<Point> &locations,
                       const std::vector<Point> &on_vertices,
                       const std::vector<Point> &off_vertices,
                       const std::vector<std::vector<double>> &distance,
-                      std::map<std::pair<int, int>, VertexInfo> &vertex_map,
-                      const std::set<std::pair<int, int>> &high_entropy_points) {
+                      std::map<size_t, VertexInfo> &vertex_map,
+                      const std::set<size_t> &high_entropy_points) {
   vertex_map.clear();
-  std::map<std::pair<int, int>, size_t> point_to_index;
+  std::map<size_t, size_t> point_to_index;
 
   // 赋映射标识序号
   for (size_t i = 0; i < locations.size(); ++i) {
-    point_to_index[{locations[i].x, locations[i].y}] = i;
+    point_to_index[locations[i].id] = i;
   }
 
   //   遍历所有位置点 并且初根据是否在路径中始化他们的状态
   for (const auto &point : locations) {
-    std::pair<int, int> key = {point.x, point.y};
+    size_t key = point.id;
 
     // TODO 修改为使用std::unordered_set对点存储 O(n) -> O(1)
     // 这里的逻辑是对每个点 find查找在路径点上的集合 判断这个点是否在集合上
@@ -240,13 +237,13 @@ void build_vertex_map(const std::vector<Point> &locations,
     bool on_route =
         std::find_if(on_vertices.begin(), on_vertices.end(),
                      [&point](const Point &p) {
-                       return p.x == point.x && point.y == p.y;
+                       return p.id == point.id;
                      }) != on_vertices.end();
 
     // 缺省情况下 isolation_cost = 0，如果在 ISOLATION_COSTS
     // 中有对应记录，则使用该值。
     double iso_cost = 0.0;
-    auto it_iso = ISOLATION_COSTS.find(key);
+    auto it_iso = ISOLATION_COSTS.find({point.x, point.y});
     if (it_iso != ISOLATION_COSTS.end()) {
       iso_cost = it_iso->second;
     }
@@ -255,10 +252,10 @@ void build_vertex_map(const std::vector<Point> &locations,
 
     if (on_route) {
       vertex_map[key] =
-          VertexInfo(point_to_index[key], "Y", {0, 0}, 0.0, iso_cost, is_he);
+          VertexInfo(key, "Y", {0, 0}, 0.0, iso_cost, is_he);
     } else {
       vertex_map[key] =
-          VertexInfo(point_to_index[key], "N", {0, 0}, 0.0, iso_cost, is_he);
+          VertexInfo(key, "N", {0, 0}, 0.0, iso_cost, is_he);
     }
   }
 }

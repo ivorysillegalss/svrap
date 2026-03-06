@@ -1,10 +1,10 @@
 # Makefile
 CXX      := g++
-# 执行用
-# CXXFLAGS := -std=c++17 -O2 -w
-# 调试用
-CXXFLAGS := -std=c++17 -g -Wall -Wextra   # 调试必备
-TARGET   := app
+# release mode
+CXXFLAGS := -std=c++17 -O2 -w
+# debug mode
+# CXXFLAGS := -std=c++17 -g -Wall -Wextra   # debug mode
+TARGET   := svrap
 BUILD_LOG := build.log
 RUN_LOG   := run.log
 
