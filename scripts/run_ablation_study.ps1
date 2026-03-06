@@ -19,10 +19,9 @@ $datasets = @(
 
 $strategies = @("baseline", "no_nn", "no_entropy", "no_knn", "simple_div", "full")
 $alpha = 7
-$numRuns = 30
-$root = ".."  # Assuming running from scripts/ directory
-$exePath = "$root\svrap.exe"
-$resultsDir = "$root\results"
+$numRuns = 30  # Restored to full benchmark spec
+
+$resultsDir = "results"
 $resultsFile = "$resultsDir\ablation_results.csv"
 
 # Ensure results directory exists
@@ -34,7 +33,7 @@ if (-not (Test-Path $resultsDir)) {
 "Dataset,Strategy,Run,BestCost,Time" | Out-File -FilePath $resultsFile -Encoding utf8
 
 foreach ($dataset in $datasets) {
-    $datasetPath = "$root\formatted_dataset\$dataset"
+    $datasetPath = "formatted_dataset\$dataset"
     
     # Check if dataset exists
     if (-not (Test-Path $datasetPath)) {
@@ -45,14 +44,19 @@ foreach ($dataset in $datasets) {
     # Generate neural probabilities ONCE per dataset
     Write-Host "Generating probabilities for $dataset..."
     # Using python from path, ensure environment is active
-    & "C:\Users\chenz\miniconda3\envs\altr-py310\python.exe" "$root\svrap_solver.py" --dataset $datasetPath --no-train
+    python svrap_solver.py --dataset $datasetPath --no-train # Use --no-train to speed up if model exists
     
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Python script failed for $dataset. Skipping..."
+        continue
+    }
+
     foreach ($strategy in $strategies) {
         Write-Host "Running $dataset with $strategy ($numRuns runs)..."
         
         for ($i = 1; $i -le $numRuns; $i++) {
             # Run the executable and capture output
-            $output = & $exePath $alpha $datasetPath $strategy 2>&1
+            $output = & svrap.exe $alpha $datasetPath $strategy 2>&1
             
             # Parse output for Best Cost and Time
             $bestCost = "N/A"

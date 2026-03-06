@@ -18,7 +18,7 @@ DATASETS = [
     "../formatted_dataset/kroE100.txt"
 ]
 OUTPUT_FILE = "../results/stability_test_results.csv"
-NUM_RUNS = 30  # Run each dataset 3 times
+NUM_RUNS = 30  # Restored to full benchmark spec
 
 BEST_COST_PATTERN = re.compile(r"Best cost(?: for .*?)?=\s*([0-9eE+\-.]+)")
 
