@@ -137,9 +137,37 @@ TabuSearch ::operation_style(
     const std::map<size_t, VertexInfo> &iter_dic,
     double base_allocation_cost) {
 
-  // 三个操作中随机选择一个
+  // 三个操作中随机选择一个（基于策略网络概率自适应调整）
   std::array<int, 3> choices = {ADD, DROP, TWOOPT};
-  int style_number = choices[std::uniform_int_distribution<int>(0, 2)(rng)];
+  int style_number;
+  
+  if (!point_probs_.empty()) {
+      double max_off_tour_prob = 0.0;
+      double min_on_tour_prob = 1.0;
+      
+      for (const auto& kv : iter_dic) {
+          auto it = point_probs_.find(kv.first);
+          if (it != point_probs_.end()) {
+              if (kv.second.status == "N") {
+                  max_off_tour_prob = std::max(max_off_tour_prob, it->second);
+              } else if (kv.second.status == "Y") {
+                  min_on_tour_prob = std::min(min_on_tour_prob, it->second);
+              }
+          }
+      }
+      
+      // 倾向性权重计算：
+      // 如果外围有某个点概率极大，则 ADD 权重极高
+      // 如果路径内有某个点概率极小，则 DROP 权重极高
+      double add_weight = max_off_tour_prob;
+      double drop_weight = 1.0 - min_on_tour_prob;
+      double twoopt_weight = 0.5; // 基线微调权重
+      
+      std::vector<double> op_weights = {add_weight + 0.1, drop_weight + 0.1, twoopt_weight};
+      style_number = choices[std::discrete_distribution<int>(op_weights.begin(), op_weights.end())(rng)];
+  } else {
+      style_number = choices[std::uniform_int_distribution<int>(0, 2)(rng)];
+  }
 
   // 防止对空路径进行 Drop/TwoOpt
   if (route.size() < 2 && style_number != ADD)
@@ -164,9 +192,18 @@ TabuSearch ::operation_style(
       return {route, iter_dic, std::numeric_limits<double>::max(), {}};
     }
 
-    // 随机选一个
-    add_vertice = candidates[std::uniform_int_distribution<int>(
-        0, static_cast<int>(candidates.size()) - 1)(rng)];
+    // 基于策略网络概率 (point_probs_) 进行轮盘赌选择
+    std::vector<double> weights(candidates.size(), 1.0);
+    if (!point_probs_.empty()) {
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            auto it = point_probs_.find(candidates[i].id);
+            if (it != point_probs_.end()) {
+                weights[i] = std::max(1e-6, it->second); // 使用神经网络输出概率，加一个极小的保底值
+            }
+        }
+    }
+    std::discrete_distribution<int> dist(weights.begin(), weights.end());
+    add_vertice = candidates[dist(rng)];
 
     // 更新 Map 状态
     add_dic[add_vertice.id].status = "Y";
@@ -281,10 +318,18 @@ TabuSearch ::operation_style(
     auto drop_route = route;
 
     
-    // 随机删除一个位置上的顶点
-    int drop_index =
-        std::uniform_int_distribution<int>(0,
-                                           static_cast<int>(drop_route.size()) - 1)(rng);
+    // 基于策略网络概率反向选择：概率越低，越容易被 DROP
+    std::vector<double> drop_weights(drop_route.size(), 1.0);
+    if (!point_probs_.empty()) {
+        for (size_t i = 0; i < drop_route.size(); ++i) {
+            auto it = point_probs_.find(drop_route[i].id);
+            if (it != point_probs_.end()) {
+                drop_weights[i] = 1.0 / std::max(1e-6, it->second); // 概率越小，权重越大
+            }
+        }
+    }
+    std::discrete_distribution<int> drop_dist(drop_weights.begin(), drop_weights.end());
+    int drop_index = drop_dist(rng);
     Point d_vertice = drop_route[drop_index];
 
     drop_route.erase(drop_route.begin() + drop_index);
@@ -307,11 +352,15 @@ TabuSearch ::operation_style(
     std::vector<size_t> indices(route.size());
     std::iota(indices.begin(), indices.end(), 0);
     std::vector<size_t> idx(2);
-    // 随机选两个不同的索引进行交换
+    // 随机选两个不同的索引执行 2-opt (翻转区间)
     std::sample(indices.begin(), indices.end(), idx.begin(), 2, rng);
 
     std::vector<Point> new_route = route;
-    std::swap(new_route[idx[0]], new_route[idx[1]]);
+    size_t start_idx = std::min(idx[0], idx[1]);
+    size_t end_idx = std::max(idx[0], idx[1]);
+    
+    // 逆序排列选中两个索引之间的整个路径段，以解开交叉
+    std::reverse(new_route.begin() + start_idx, new_route.begin() + end_idx + 1);
 
     // Optimization: Allocation cost is unchanged!
     double routing_cost = GreedyLocalSearch::compute_routing_cost(new_route, iter_dic, distance_);
