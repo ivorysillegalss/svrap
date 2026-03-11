@@ -19,7 +19,7 @@ $datasets = @(
 
 $strategies = @("baseline", "no_nn", "no_entropy", "no_knn", "simple_div", "full")
 $alpha = 7
-$numRuns = 30  # Restored to full benchmark spec
+$numRuns = 10  # Restored to full benchmark spec
 
 $resultsDir = "results"
 $resultsFile = "$resultsDir\ablation_results.csv"
@@ -44,7 +44,7 @@ foreach ($dataset in $datasets) {
     # Generate neural probabilities ONCE per dataset
     Write-Host "Generating probabilities for $dataset..."
     # Using python from path, ensure environment is active
-    python svrap_solver.py --dataset $datasetPath --no-train # Use --no-train to speed up if model exists
+    C:\Users\chenz\miniconda3\envs\altr-py310\python.exe svrap_solver.py --dataset $datasetPath --no-train # Use --no-train to speed up if model exists
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Python script failed for $dataset. Skipping..."
@@ -56,7 +56,7 @@ foreach ($dataset in $datasets) {
         
         for ($i = 1; $i -le $numRuns; $i++) {
             # Run the executable and capture output
-            $output = & svrap.exe $alpha $datasetPath $strategy 2>&1
+            $output = & .\svrap.exe $alpha $datasetPath $strategy 2>&1
             
             # Parse output for Best Cost and Time
             $bestCost = "N/A"

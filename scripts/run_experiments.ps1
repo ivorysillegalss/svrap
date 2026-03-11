@@ -1,4 +1,4 @@
-# run_experiments.ps1
+﻿﻿# run_experiments.ps1
 # SVRAP 实验的批量执行脚本
 # 执行步骤: 针对每个数据集 -> 运行 Python 策略网络生成 attention_probs.csv -> 运行带参的 C++ 禁忌搜索单独读取该 CSV 进行求解
 
@@ -12,7 +12,7 @@ $PythonScript = "svrap_solver.py"
 $CppExe = ".\svrap.exe"
 
 # 确保尽可能使用当前环境的 python
-$PythonExe = (Get-Command python).Source
+$PythonExe = "C:\Users\chenz\miniconda3\envs\altr-py310\python.exe"
 Write-Host "使用的 Python 解释器: $PythonExe"
 # =============================================
 

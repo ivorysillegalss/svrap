@@ -104,7 +104,7 @@ def run_module(module_id, module_info):
         result = subprocess.run(
             ["python", module_info['script']],
             capture_output=False,
-            text=True
+            
         )
         elapsed = time.time() - start_time
         
@@ -140,7 +140,7 @@ def main():
     print("-" * 60)
     
     # 获取用户选择
-    choice = input("\n请选择要运行的模块 (例如: 1_stability 或 all): ").strip().lower()
+    choice = 'all' # input("\n请选择要运行的模块 (例如: 1_stability 或 all): ").strip().lower()
     
     if choice == 'q':
         print("退出")
