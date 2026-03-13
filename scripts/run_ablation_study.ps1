@@ -20,9 +20,10 @@ $datasets = @(
 $strategies = @("baseline", "no_nn", "no_entropy", "no_knn", "simple_div", "full")
 $alpha = 7
 $numRuns = 10  # Restored to full benchmark spec
+$variantTag = "v_halloc"
 
 $resultsDir = "results"
-$resultsFile = "$resultsDir\ablation_results.csv"
+$resultsFile = "$resultsDir\ablation_results_$variantTag.csv"
 
 # Ensure results directory exists
 if (-not (Test-Path $resultsDir)) {
@@ -44,7 +45,7 @@ foreach ($dataset in $datasets) {
     # Generate neural probabilities ONCE per dataset
     Write-Host "Generating probabilities for $dataset..."
     # Using python from path, ensure environment is active
-    C:\Users\chenz\miniconda3\envs\altr-py310\python.exe svrap_solver.py --dataset $datasetPath --no-train # Use --no-train to speed up if model exists
+    C:\Users\chenz\miniconda3\envs\altr-py310\python.exe svrap_solver.py --dataset $datasetPath --no-train --variant-tag $variantTag # Use --no-train to speed up if model exists
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Python script failed for $dataset. Skipping..."

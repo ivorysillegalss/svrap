@@ -6,7 +6,8 @@ $ErrorActionPreference = "Continue"
 
 # ================= 配置区 =================
 $DatasetDir = "formatted_dataset"
-$LogFile = "experiment_results.log"
+$VariantTag = "v_halloc"
+$LogFile = "experiment_results_$VariantTag.log"
 $Alpha = 7.0
 $PythonScript = "svrap_solver.py"
 $CppExe = ".\svrap.exe"
@@ -56,10 +57,10 @@ foreach ($File in $Datasets) {
     # 1. 运行 Python (训练/推理 + 覆盖生成当前数据集的初始解 CSV)
     Write-Host "  [1/2] 正在运行 Python 策略网络..." -NoNewline
     
-    "COMMAND: $PythonExe $PythonScript --dataset `"$DatasetPath`" --train" | Out-File -FilePath $LogFile -Append -Encoding utf8
+    "COMMAND: $PythonExe $PythonScript --dataset `"$DatasetPath`" --train --variant-tag $VariantTag" | Out-File -FilePath $LogFile -Append -Encoding utf8
     
     # 运行命令，捕获输出，检查状态，然后写入日志
-    $pyOutput = & $PythonExe $PythonScript --dataset "$DatasetPath" --train 2>&1
+    $pyOutput = & $PythonExe $PythonScript --dataset "$DatasetPath" --train --variant-tag $VariantTag 2>&1
     $pyStatus = $LASTEXITCODE
     
     $pyOutput | Out-File -FilePath $LogFile -Append -Encoding utf8

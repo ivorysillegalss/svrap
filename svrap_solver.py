@@ -57,12 +57,27 @@ class SVRAPConfig:
     MODEL_DIR = "models"
     CSV_OUTPUT = "attention_probs.csv"
     BACKBONE_OUTPUT = "backbone_indices.txt"
+    VARIANT_TAG = ""
 
     @staticmethod
-    def get_model_path(dataset_name="default"):
+    def get_variant_suffix(variant_tag: Optional[str] = None) -> str:
+        tag = SVRAPConfig.VARIANT_TAG if variant_tag is None else variant_tag
+        if not tag:
+            return ""
+        safe_tag = tag.strip().replace(" ", "_")
+        return f"_{safe_tag}"
+
+    @staticmethod
+    def get_model_path(dataset_name="default", variant_tag: Optional[str] = None):
         if not os.path.exists(SVRAPConfig.MODEL_DIR):
             os.makedirs(SVRAPConfig.MODEL_DIR)
-        return os.path.join(SVRAPConfig.MODEL_DIR, f"svrap_best_model_{dataset_name}.pth")
+        suffix = SVRAPConfig.get_variant_suffix(variant_tag)
+        return os.path.join(SVRAPConfig.MODEL_DIR, f"svrap_best_model_{dataset_name}{suffix}.pth")
+
+    @staticmethod
+    def get_training_log_path(dataset_name="default", variant_tag: Optional[str] = None):
+        suffix = SVRAPConfig.get_variant_suffix(variant_tag)
+        return f"training_log_{dataset_name}{suffix}.csv"
 
 # ==========================================
 # 2. Environment
@@ -283,7 +298,7 @@ class ContextEncoder(nn.Module):
 class RouteToAllocCrossAttention(nn.Module):
     """
     Cross-Attention mechanism: Route query Alloc
-    Q: H_route, K: H_alloc, V: H_route
+    Q: H_route, K: H_alloc, V: H_alloc
     """
     def __init__(self, embed_dim, n_heads):
         super().__init__()
@@ -298,8 +313,8 @@ class RouteToAllocCrossAttention(nn.Module):
         self.ln2 = nn.LayerNorm(embed_dim)
 
     def forward(self, h_route, h_alloc):
-        # According to the plan: Q=h_route, K=h_alloc, V=h_route
-        attn_out, _ = self.cross_mha(query=h_route, key=h_alloc, value=h_route)
+        # Variant test: Q=h_route, K=h_alloc, V=h_alloc
+        attn_out, _ = self.cross_mha(query=h_route, key=h_alloc, value=h_alloc)
         h = self.ln1(h_route + attn_out)
         
         ffn_out = self.ffn(h)
@@ -379,6 +394,8 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
     
     model_path = SVRAPConfig.get_model_path(dataset_name)
+    if SVRAPConfig.VARIANT_TAG:
+        print(f"Variant Tag: {SVRAPConfig.VARIANT_TAG}")
     
     # 3. Training Loop
     if train_model:
@@ -451,7 +468,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         print(f"Training finished. Best Cost: {best_cost:.2f}")
         
         # Save Training History
-        history_path = f"training_log_{dataset_name}.csv"
+        history_path = SVRAPConfig.get_training_log_path(dataset_name)
         with open(history_path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Epoch', 'Cost', 'Baseline', 'Best'])
@@ -527,11 +544,13 @@ if __name__ == "__main__":
     parser.add_argument("--train", action="store_true", help="Force training even if model exists")
     parser.add_argument("--no-train", action="store_true", help="Skip training, only inference")
     parser.add_argument("--epochs", type=int, default=2000, help="Number of training epochs")
+    parser.add_argument("--variant-tag", type=str, default="", help="Tag for isolating model/log artifacts across test variants")
     
     args = parser.parse_args()
 
     # Update Config
     SVRAPConfig.EPOCHS = args.epochs
+    SVRAPConfig.VARIANT_TAG = args.variant_tag.strip()
     
     dataset_path = args.dataset
     
