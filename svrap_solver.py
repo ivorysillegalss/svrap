@@ -52,6 +52,7 @@ class SVRAPConfig:
 
     # Backbone Construction
     TOP_K_ROUTE_RATIO = 0.2
+    NO_ROUTE_PENALTY = 50000.0
 
     # Paths
     MODEL_DIR = "models"
@@ -158,12 +159,12 @@ class SVRAPEnvironment:
 
     def evaluate_solution(self, actions: torch.Tensor) -> Tuple[float, dict]:
         """
-        actions: tensor of shape (N,) with values 0 (ASSIGN), 1 (ROUTE), 2 (LOSS)
+        actions: tensor of shape (N,) with values 0 (OFF_ROUTE), 1 (ROUTE)
+        For OFF_ROUTE vertices, assignment vs isolation is chosen greedily by cost.
         Returns: total_cost, details_dict
         """
         route_indices = (actions == 1).nonzero(as_tuple=True)[0]
-        assign_indices = (actions == 0).nonzero(as_tuple=True)[0]
-        loss_indices = (actions == 2).nonzero(as_tuple=True)[0]
+        off_indices = (actions == 0).nonzero(as_tuple=True)[0]
 
         tour_cost = 0.0
         alloc_cost = 0.0
@@ -171,46 +172,52 @@ class SVRAPEnvironment:
         penalty = 0.0
 
         # 1. Tour Cost
-        if len(route_indices) > 0:
+        if len(route_indices) > 1:
             # Approximate tour cost: Need a TSP solver for an exact tour.
             # Here we use a simple Nearest Neighbor heuristic to approximate the tour cost
             # rather than just connecting nodes by their random index order.
             current_nodes = route_indices.tolist()
-            if len(current_nodes) > 1:
-                unvisited = set(current_nodes)
-                current = current_nodes[0]
-                unvisited.remove(current)
-                first_node = current
-                
-                while unvisited:
-                    # Find nearest unvisited node based on c_matrix
-                    next_node = min(unvisited, key=lambda x: self.c_matrix[current, x].item())
-                    tour_cost += self.c_matrix[current, next_node].item()
-                    unvisited.remove(next_node)
-                    current = next_node
-                
-                # Connect last node back to first to complete the tour
-                tour_cost += self.c_matrix[current, first_node].item()
-        else:
-            # No route nodes
-            if len(assign_indices) > 0:
-                penalty += 1e5 # Invalid state: ASSIGN nodes need a ROUTE backbone
+            unvisited = set(current_nodes)
+            current = current_nodes[0]
+            unvisited.remove(current)
+            first_node = current
 
-        # 2. Allocation Cost
-        if len(assign_indices) > 0:
-            if len(route_indices) > 0:
-                for idx in assign_indices:
-                    # Find min d_ij to any node in route_indices
-                    d_vals = self.d_matrix[idx, route_indices]
-                    min_d = torch.min(d_vals).item()
-                    alloc_cost += min_d
+            while unvisited:
+                # Find nearest unvisited node based on c_matrix
+                next_node = min(unvisited, key=lambda x: self.c_matrix[current, x].item())
+                tour_cost += self.c_matrix[current, next_node].item()
+                unvisited.remove(next_node)
+                current = next_node
 
-        # 3. Isolation Cost
-        # f_isol = sum(D_i * v_i), 最终乘以 lambda_isol
-        for idx in loss_indices:
-            isol_cost += self.D_i[idx].item()
+            # Connect last node back to first to complete the tour
+            tour_cost += self.c_matrix[current, first_node].item()
+
+        # Avoid degenerate all-off-route solutions that disable tour guidance.
+        if len(route_indices) == 0:
+            penalty += SVRAPConfig.NO_ROUTE_PENALTY
+
+        # 2/3. For each OFF_ROUTE vertex, greedily choose ASSIGN or LOSS by lower cost.
+        n_assign = 0
+        n_loss = 0
+        route_idx_tensor = route_indices
+        for idx in off_indices.tolist():
+            assign_candidate = float('inf')
+            if len(route_idx_tensor) > 0:
+                d_vals = self.d_matrix[idx, route_idx_tensor]
+                assign_candidate = torch.min(d_vals).item()
+
+            loss_candidate = self.lambda_isol * self.D_i[idx].item()
             if not SVRAPConfig.ALLOW_ISOLATED_VERTICES:
-                penalty += SVRAPConfig.ISOLATED_VERTEX_PENALTY
+                loss_candidate += SVRAPConfig.ISOLATED_VERTEX_PENALTY
+
+            if assign_candidate <= loss_candidate:
+                alloc_cost += assign_candidate
+                n_assign += 1
+            else:
+                isol_cost += self.D_i[idx].item()
+                n_loss += 1
+                if not SVRAPConfig.ALLOW_ISOLATED_VERTICES:
+                    penalty += SVRAPConfig.ISOLATED_VERTEX_PENALTY
 
         # 目标函数: Z = λ_tour * f_tour + λ_alloc * f_alloc + λ_isol * f_isol
         total_cost = (SVRAPConfig.LAMBDA_TOUR * tour_cost + 
@@ -223,8 +230,8 @@ class SVRAPEnvironment:
             "isol": isol_cost,
             "penalty": penalty,
             "n_route": len(route_indices),
-            "n_assign": len(assign_indices),
-            "n_loss": len(loss_indices)
+            "n_assign": n_assign,
+            "n_loss": n_loss
         }
 
 # ==========================================
@@ -336,8 +343,8 @@ class SVRAPNetwork(nn.Module):
         # Cross-Attention Layer (Route -> Alloc)
         self.cross_attn_r_to_a = RouteToAllocCrossAttention(embed_dim, n_heads)
         
-        # Output heads (logits for ASSIGN, ROUTE, LOSS)
-        self.classifier = nn.Linear(embed_dim, 3)
+        # Output head (logits for OFF_ROUTE, ROUTE)
+        self.classifier = nn.Linear(embed_dim, 2)
 
     def forward(self, x, edge_feat):
         # x: (1, N, 2)
@@ -358,7 +365,7 @@ class SVRAPNetwork(nn.Module):
         h_fused = self.cross_attn_r_to_a(h_route, h_alloc) # (1, N, embed_dim)
         
         # 4. Final Classification
-        logits = self.classifier(h_fused) # (1, N, 3)
+        logits = self.classifier(h_fused) # (1, N, 2)
         return logits
 
 # ==========================================
@@ -415,20 +422,20 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             model.train()
             optimizer.zero_grad()
             
-            logits = model(node_feat, edge_feat) # (1, N, 3)
-            logits = logits.squeeze(0) # (N, 3)
-            
-            # Sample actions
+            logits = model(node_feat, edge_feat) # (1, N, 2)
+            logits = logits.squeeze(0) # (N, 2)
+
+            # Sample binary actions directly from binary model output.
             probs = F.softmax(logits, dim=-1)
             dist = Categorical(probs)
-            actions = dist.sample() # (N,)
+            actions = dist.sample() # (N,) in {0, 1}
             
             # Evaluate sampled actions
             cost, _ = env.evaluate_solution(actions)
             
             # Evaluate greedy rollout baseline
             with torch.no_grad():
-                greedy_actions = torch.argmax(logits, dim=-1)
+                greedy_actions = torch.argmax(probs, dim=-1)
                 baseline_cost, _ = env.evaluate_solution(greedy_actions)
             
             # REINFORCE Loss
@@ -488,10 +495,16 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         node_feat = node_feat.to(device)
         edge_feat = edge_feat.to(device)
         logits = model(node_feat, edge_feat).squeeze(0)
-        final_probs = F.softmax(logits, dim=-1) # (N, 3)
+        final_probs = F.softmax(logits, dim=-1) # (N, 2)
         
         # Extract Backbone
         p_route = final_probs[:, 1]
+
+        # Print class mean probabilities for quick diagnostics.
+        mean_off = final_probs[:, 0].mean().item()
+        mean_route = final_probs[:, 1].mean().item()
+        print(f"Mean probabilities -> off_route: {mean_off:.6f}, route: {mean_route:.6f}")
+        print(f"p_route range -> min: {p_route.min().item():.6f}, max: {p_route.max().item():.6f}, std: {p_route.std().item():.6f}")
         
         # Sort by p_route descending
         sorted_indices = torch.argsort(p_route, descending=True)
@@ -516,18 +529,15 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         print(f"\nExporting to {SVRAPConfig.CSV_OUTPUT}...")
         with open(SVRAPConfig.CSV_OUTPUT, 'w', newline='') as f:
             writer = csv.writer(f)
-            # Header not strictly needed by C++ but good for debug
-            # writer.writerow(["x", "y", "p_assign", "p_route", "p_loss", "is_backbone"])
+            # Binary format: x, y, p_off, p_route
             
             for i in range(env.n):
                 x, y = env.original_locations[i]
-                pa = final_probs[i, 0].item()
+                poff = final_probs[i, 0].item()
                 pr = final_probs[i, 1].item()
-                pl = final_probs[i, 2].item()
                 is_bb = "YES" if i in backbone_indices else "NO"
                 
-                # Format: x, y, p_assign, p_route, p_loss
-                writer.writerow([x, y, f"{pa:.6f}", f"{pr:.6f}", f"{pl:.6f}"])
+                writer.writerow([x, y, f"{poff:.6f}", f"{pr:.6f}"])
                 
                 print(f"Node {i}: ({x},{y}) P(R)={pr:.4f} Backbone={is_bb}")
 

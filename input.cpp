@@ -134,21 +134,42 @@ void read_attention_probs(const std::string &filename,
     if (line.empty())
       continue;
     std::stringstream ss(line);
-    std::string x_str, y_str, pa_str, pr_str, pl_str;
+    std::vector<std::string> fields;
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+      fields.push_back(token);
+    }
 
-    if (!std::getline(ss, x_str, ',') || !std::getline(ss, y_str, ',') ||
-        !std::getline(ss, pa_str, ',') || !std::getline(ss, pr_str, ',') ||
-        !std::getline(ss, pl_str, ',')) {
+    if (fields.size() < 4) {
       continue;
     }
 
     try {
       PointProb pp;
-      pp.x = std::stoi(x_str);
-      pp.y = std::stoi(y_str);
-      pp.p_assign = std::stod(pa_str);
-      pp.p_route = std::stod(pr_str);
-      pp.p_loss = std::stod(pl_str);
+      pp.x = std::stoi(fields[0]);
+      pp.y = std::stoi(fields[1]);
+
+      if (fields.size() >= 5) {
+        // Legacy format: x, y, p_assign, p_route, p_loss
+        pp.p_assign = std::stod(fields[2]);
+        pp.p_route = std::stod(fields[3]);
+        pp.p_loss = std::stod(fields[4]);
+        pp.p_off = pp.p_assign + pp.p_loss;
+      } else {
+        // Binary format: x, y, p_off, p_route
+        pp.p_off = std::stod(fields[2]);
+        pp.p_route = std::stod(fields[3]);
+        pp.p_assign = pp.p_off;
+        pp.p_loss = 0.0;
+      }
+
+      // Normalize numerical drift if needed.
+      double s = pp.p_off + pp.p_route;
+      if (s > 1e-12) {
+        pp.p_off /= s;
+        pp.p_route /= s;
+      }
+
       probs.push_back(pp);
     } catch (...) {
       continue;

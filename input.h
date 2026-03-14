@@ -52,8 +52,11 @@ struct Point {
 struct PointProb {
   int x;
   int y;
-  double p_assign;
+  // Binary probability of selecting OFF_ROUTE.
+  double p_off;
   double p_route;
+  // Legacy fields kept for compatibility with old 3-class CSV files.
+  double p_assign;
   double p_loss;
 };
 

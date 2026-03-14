@@ -7,9 +7,21 @@ def analyze_attention_probs(file_path):
     
     # Check if file exists
     try:
-        # Read CSV without header
-        # Columns based on svrap_solver.py export: x, y, p_assign, p_route, p_loss
-        df = pd.read_csv(file_path, header=None, names=['x', 'y', 'p_assign', 'p_route', 'p_loss'])
+        raw = pd.read_csv(file_path, header=None)
+        if raw.shape[1] >= 5:
+            # Legacy format: x, y, p_assign, p_route, p_loss
+            raw = raw.iloc[:, :5]
+            raw.columns = ['x', 'y', 'p_assign', 'p_route', 'p_loss']
+            raw['p_off'] = raw['p_assign'] + raw['p_loss']
+        elif raw.shape[1] >= 4:
+            # Binary format: x, y, p_off, p_route
+            raw = raw.iloc[:, :4]
+            raw.columns = ['x', 'y', 'p_off', 'p_route']
+            raw['p_assign'] = raw['p_off']
+            raw['p_loss'] = 0.0
+        else:
+            raise ValueError(f"Unexpected attention_probs format with {raw.shape[1]} columns")
+        df = raw
     except Exception as e:
         print(f"Error reading file: {e}")
         return

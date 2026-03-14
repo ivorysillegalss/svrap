@@ -299,10 +299,9 @@ int main(int argc, char **argv) {
                 }
                 if (!found) continue;
 
-                double h = 0.0;
-                if (pp.p_assign > 1e-9) h -= pp.p_assign * std::log(pp.p_assign);
-                if (pp.p_route > 1e-9) h -= pp.p_route * std::log(pp.p_route);
-                if (pp.p_loss > 1e-9) h -= pp.p_loss * std::log(pp.p_loss);
+              double h = 0.0;
+              if (pp.p_off > 1e-9) h -= pp.p_off * std::log(pp.p_off);
+              if (pp.p_route > 1e-9) h -= pp.p_route * std::log(pp.p_route);
                 entropies.push_back({h, p_id});
             }
             
