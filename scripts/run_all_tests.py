@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 SVRAP 完整测试执行器
-根据TEST_PLAN.md自动执行所有测试模块
+根据脚本内置测试配置自动执行所有测试模块
 """
 
 import subprocess

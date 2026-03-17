@@ -435,7 +435,11 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             
             # Evaluate greedy rollout baseline
             with torch.no_grad():
-                greedy_actions = torch.argmax(probs, dim=-1)
+                k_baseline = min(env.n, max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO)))
+                route_scores = probs[:, 1]
+                topk_indices = torch.topk(route_scores, k=k_baseline).indices
+                greedy_actions = torch.zeros(env.n, dtype=torch.long, device=probs.device)
+                greedy_actions[topk_indices] = 1
                 baseline_cost, _ = env.evaluate_solution(greedy_actions)
             
             # REINFORCE Loss
