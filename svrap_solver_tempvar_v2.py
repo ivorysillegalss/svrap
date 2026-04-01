@@ -35,8 +35,8 @@ class SVRAPConfig:
     EMBED_DIM = 128
     N_HEADS = 8
     LR = 1e-3
-    EPOCHS = 5000
-    EARLY_STOP_PATIENCE = 300
+    EPOCHS = 2000
+    EARLY_STOP_PATIENCE = 100
     MIN_EPOCHS = 100
 
     # SVRAP Problem Parameters
@@ -54,14 +54,12 @@ class SVRAPConfig:
     TOP_K_ROUTE_RATIO = 0.2
     NO_ROUTE_PENALTY = 50000.0
 
-    # Counterfactual node-guidance strategy (objective-aware per-node signal).
-    USE_COUNTERFACTUAL_NODE_LOSS = True
-    NODE_LOSS_WEIGHT = 1.0
-    RL_LOSS_WEIGHT = 0.25
-    COUNTERFACTUAL_SIGMOID_TEMP = 500.0
-    ENTROPY_BONUS_WEIGHT = 0.01
-    SEED = 42
-    EXTRA_REINFORCE_ONLY_DATASETS = set()
+    # Alternative strategy v2: temperature annealing + route variance regularization.
+    # This encourages p_route separation without hand-crafted pseudo labels.
+    USE_ROUTE_VARIANCE_REG = True
+    ROUTE_VAR_REG_WEIGHT = 3.0
+    TEMP_START = 1.5
+    TEMP_END = 0.7
 
     # Paths
     MODEL_DIR = "models"
@@ -403,11 +401,6 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     node_feat = env.tensor_locs.unsqueeze(0) # (1, N, 2)
 
     # 2. Model Setup
-    random.seed(SVRAPConfig.SEED)
-    torch.manual_seed(SVRAPConfig.SEED)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(SVRAPConfig.SEED)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     env.to(device)
@@ -419,15 +412,6 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
         print(f"Variant Tag: {SVRAPConfig.VARIANT_TAG}")
     
     # 3. Training Loop
-    reinforce_only_datasets = {"d198"} | set(SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS)
-    sparse_node_loss_datasets = {"d493", "rat783"}
-    use_reinforce_only = dataset_name in reinforce_only_datasets
-    node_loss_interval = 5 if dataset_name in sparse_node_loss_datasets else 1
-
-    if use_reinforce_only:
-        print(f"Training mode for {dataset_name}: REINFORCE only")
-    elif node_loss_interval > 1:
-        print(f"Training mode for {dataset_name}: node loss every {node_loss_interval} epochs")
     if train_model:
         print(f"Starting Training for {dataset_name}...")
         optimizer = optim.Adam(model.parameters(), lr=SVRAPConfig.LR)
@@ -449,7 +433,13 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             logits = logits.squeeze(0) # (N, 2)
 
             # Sample binary actions directly from binary model output.
-            probs = F.softmax(logits, dim=-1)
+            # Linear temperature annealing from TEMP_START to TEMP_END.
+            if SVRAPConfig.EPOCHS > 1:
+                progress = epoch / float(SVRAPConfig.EPOCHS - 1)
+            else:
+                progress = 1.0
+            temperature = SVRAPConfig.TEMP_START + (SVRAPConfig.TEMP_END - SVRAPConfig.TEMP_START) * progress
+            probs = F.softmax(logits / max(temperature, 1e-6), dim=-1)
             dist = Categorical(probs)
             actions = dist.sample() # (N,) in {0, 1}
             
@@ -467,51 +457,18 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             
             # REINFORCE Loss
             log_probs = dist.log_prob(actions)
-
-            # Normalize advantage to keep gradients stable across datasets/scales.
             denom = max(abs(baseline_cost), 1.0)
             advantage = (cost - baseline_cost) / denom
-            reinforce_loss = log_probs.mean() * advantage
+            reinforce_loss = (log_probs * advantage).mean()
+            loss = reinforce_loss
 
-            node_loss = torch.tensor(0.0, device=probs.device)
-            cf_gain_std = 0.0
-            should_compute_node_loss = (
-                SVRAPConfig.USE_COUNTERFACTUAL_NODE_LOSS
-                and not use_reinforce_only
-                and (epoch % node_loss_interval == 0)
-            )
-
-            if should_compute_node_loss:
-                # Counterfactual signal per node: compare cost if node is forced ROUTE vs OFF_ROUTE.
-                cf_gains = []
-                cf_base_actions = greedy_actions.clone()
-                for i in range(env.n):
-                    actions_on = cf_base_actions.clone()
-                    actions_on[i] = 1
-                    cost_on, _ = env.evaluate_solution(actions_on)
-
-                    actions_off = cf_base_actions.clone()
-                    actions_off[i] = 0
-                    cost_off, _ = env.evaluate_solution(actions_off)
-
-                    # Positive gain means routing this node helps.
-                    cf_gains.append(cost_off - cost_on)
-
-                cf_gains_t = torch.tensor(cf_gains, dtype=torch.float32, device=probs.device)
-                cf_gain_std = cf_gains_t.std(unbiased=False).item()
-
-                target_route_prob = torch.sigmoid(cf_gains_t / SVRAPConfig.COUNTERFACTUAL_SIGMOID_TEMP)
-                node_loss = F.binary_cross_entropy(probs[:, 1], target_route_prob)
-
-            entropy_bonus = dist.entropy().mean()
-            if use_reinforce_only:
-                loss = reinforce_loss
-            else:
-                loss = (
-                    SVRAPConfig.RL_LOSS_WEIGHT * reinforce_loss
-                    + SVRAPConfig.NODE_LOSS_WEIGHT * node_loss
-                    - SVRAPConfig.ENTROPY_BONUS_WEIGHT * entropy_bonus
-                )
+            route_var_val = 0.0
+            if SVRAPConfig.USE_ROUTE_VARIANCE_REG:
+                route_probs = probs[:, 1]
+                route_var = torch.var(route_probs, unbiased=False)
+                route_var_val = route_var.item()
+                # Maximize route variance to avoid near-constant p_route collapse.
+                loss = loss - SVRAPConfig.ROUTE_VAR_REG_WEIGHT * route_var
             
             loss.backward()
             optimizer.step()
@@ -535,12 +492,10 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             
             if epoch % 100 == 0:
                 mean_route_prob = probs[:, 1].mean().item()
-                std_route_prob = probs[:, 1].std(unbiased=False).item()
                 print(
                     f"Epoch {epoch}: Cost {cost:.2f}, Best {best_cost:.2f}, "
-                    f"Baseline {baseline_cost:.2f}, Mean p_route {mean_route_prob:.4f}, "
-                    f"Std p_route {std_route_prob:.4f}, CF std {cf_gain_std:.2f}, "
-                    f"NodeLoss {node_loss.item():.4f}, NodeStep {should_compute_node_loss}"
+                    f"Baseline {baseline_cost:.2f}, Temp {temperature:.4f}, "
+                    f"Mean p_route {mean_route_prob:.4f}, RouteVar {route_var_val:.6f}"
                 )
             
             # Early Stopping
@@ -631,23 +586,12 @@ if __name__ == "__main__":
     parser.add_argument("--no-train", action="store_true", help="Skip training, only inference")
     parser.add_argument("--epochs", type=int, default=2000, help="Number of training epochs")
     parser.add_argument("--variant-tag", type=str, default="", help="Tag for isolating model/log artifacts across test variants")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for Python/Torch/CUDA")
-    parser.add_argument(
-        "--reinforce-only-datasets",
-        nargs="*",
-        default=[],
-        help="Additional dataset names to train with pure REINFORCE (e.g., d493 rat783)",
-    )
     
     args = parser.parse_args()
 
     # Update Config
     SVRAPConfig.EPOCHS = args.epochs
     SVRAPConfig.VARIANT_TAG = args.variant_tag.strip()
-    SVRAPConfig.SEED = args.seed
-    SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS = {
-        d.strip() for d in args.reinforce_only_datasets if d and d.strip()
-    }
     
     dataset_path = args.dataset
     

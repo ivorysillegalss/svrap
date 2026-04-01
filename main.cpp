@@ -105,9 +105,22 @@ int main(int argc, char **argv) {
     }
 
     StrategyConfig config;
+    bool lock_paper_baseline = false;
     if (argc >= 4) {
         std::string strategy = argv[3];
-        if (strategy == "baseline") {
+      if (strategy == "paper_baseline") {
+        // Strict TS-SVRAP paper-aligned baseline:
+        // keep core tabu/diversification/path-relinking, disable later-added guidance/acceleration.
+        config.use_neural_init = false;
+        config.use_entropy = false;
+        config.use_knn = false;
+        config.use_frequency_based_diversification = false;
+        config.tabu_list_length = 15;
+        config.diversification_times = 2;
+        config.path_relinking_times = 50;
+        config.entropy_weight = 0.0;
+        lock_paper_baseline = true;
+      } else if (strategy == "baseline") {
             config.use_neural_init = false;
             config.use_entropy = false;
         } else if (strategy == "no_nn") {
@@ -123,48 +136,68 @@ int main(int argc, char **argv) {
     }
 
     if (argc >= 5) {
+      if (lock_paper_baseline) {
+        std::cout << "paper_baseline: ignore K_NEIGHBORS override, use fixed value." << std::endl;
+      } else {
         try {
             config.k_neighbors = std::stoi(argv[4]);
             std::cout << "Using K_NEIGHBORS = " << config.k_neighbors << std::endl;
         } catch (...) {
              std::cout << "Warning: failed to parse K from argv[4], keep default " << config.k_neighbors << std::endl;
         }
+      }
     }
 
     if (argc >= 6) {
+      if (lock_paper_baseline) {
+        std::cout << "paper_baseline: ignore TABU_LIST_LENGTH override, use fixed value 15." << std::endl;
+      } else {
         try {
             config.tabu_list_length = std::stoi(argv[5]);
             std::cout << "Using TABU_LIST_LENGTH = " << config.tabu_list_length << std::endl;
         } catch (...) {
              std::cout << "Warning: failed to parse TABU_LIST_LENGTH from argv[5], keep default " << config.tabu_list_length << std::endl;
         }
+      }
     }
 
     if (argc >= 7) {
+      if (lock_paper_baseline) {
+        std::cout << "paper_baseline: ignore DIVERSIFICATION_TIMES override, use fixed value 2." << std::endl;
+      } else {
         try {
             config.diversification_times = std::stoi(argv[6]);
             std::cout << "Using DIVERSIFICATION_TIMES = " << config.diversification_times << std::endl;
         } catch (...) {
              std::cout << "Warning: failed to parse DIVERSIFICATION_TIMES from argv[6], keep default " << config.diversification_times << std::endl;
         }
+      }
     }
 
     if (argc >= 8) {
+      if (lock_paper_baseline) {
+        std::cout << "paper_baseline: ignore PATH_RELINKING_TIMES override, use fixed value 50." << std::endl;
+      } else {
         try {
             config.path_relinking_times = std::stoi(argv[7]);
             std::cout << "Using PATH_RELINKING_TIMES = " << config.path_relinking_times << std::endl;
         } catch (...) {
              std::cout << "Warning: failed to parse PATH_RELINKING_TIMES from argv[7], keep default " << config.path_relinking_times << std::endl;
         }
+      }
     }
 
     if (argc >= 9) {
+      if (lock_paper_baseline) {
+        std::cout << "paper_baseline: ignore ENTROPY_WEIGHT override, use fixed value 0." << std::endl;
+      } else {
         try {
             config.entropy_weight = std::stod(argv[8]);
             std::cout << "Using ENTROPY_WEIGHT = " << config.entropy_weight << std::endl;
         } catch (...) {
              std::cout << "Warning: failed to parse ENTROPY_WEIGHT from argv[8], keep default " << config.entropy_weight << std::endl;
         }
+      }
     }
 
     for (const auto &file : instance_files) {
