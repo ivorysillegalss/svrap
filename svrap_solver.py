@@ -382,6 +382,17 @@ class SVRAPNetwork(nn.Module):
 # ==========================================
 
 def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
+    def sample_actions_gumbel_topk(route_probs: torch.Tensor, k: int) -> torch.Tensor:
+        """Sample exactly k route nodes using independent Gumbel noise per node."""
+        eps = 1e-12
+        u = torch.rand_like(route_probs).clamp_(min=eps, max=1.0 - eps)
+        gumbel = -torch.log(-torch.log(u))
+        scores = torch.log(route_probs.clamp_min(eps)) + gumbel
+        topk_indices = torch.topk(scores, k=k).indices
+        actions = torch.zeros(route_probs.size(0), dtype=torch.long, device=route_probs.device)
+        actions[topk_indices] = 1
+        return actions
+
     # Determine dataset name for model saving
     if dataset_path:
         dataset_name = os.path.splitext(os.path.basename(dataset_path))[0]
@@ -420,14 +431,19 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     
     # 3. Training Loop
     reinforce_only_datasets = {"d198"} | set(SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS)
+    large_graph_gumbel_topk_datasets = {"d493", "rat783"}
     sparse_node_loss_datasets = {"d493", "rat783"}
     use_reinforce_only = dataset_name in reinforce_only_datasets
+    use_gumbel_topk_sampling = dataset_name in large_graph_gumbel_topk_datasets
+    fixed_k_route = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
     node_loss_interval = 5 if dataset_name in sparse_node_loss_datasets else 1
 
     if use_reinforce_only:
         print(f"Training mode for {dataset_name}: REINFORCE only")
     elif node_loss_interval > 1:
         print(f"Training mode for {dataset_name}: node loss every {node_loss_interval} epochs")
+    if use_gumbel_topk_sampling:
+        print(f"Training mode for {dataset_name}: Gumbel Top-K sampling with fixed k={fixed_k_route}")
     if train_model:
         print(f"Starting Training for {dataset_name}...")
         optimizer = optim.Adam(model.parameters(), lr=SVRAPConfig.LR)
@@ -451,7 +467,10 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             # Sample binary actions directly from binary model output.
             probs = F.softmax(logits, dim=-1)
             dist = Categorical(probs)
-            actions = dist.sample() # (N,) in {0, 1}
+            if use_gumbel_topk_sampling:
+                actions = sample_actions_gumbel_topk(probs[:, 1], fixed_k_route)
+            else:
+                actions = dist.sample() # (N,) in {0, 1}
             
             # Evaluate sampled actions
             cost, _ = env.evaluate_solution(actions)
@@ -466,7 +485,15 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 baseline_cost, _ = env.evaluate_solution(greedy_actions)
             
             # REINFORCE Loss
-            log_probs = dist.log_prob(actions)
+            if use_gumbel_topk_sampling:
+                eps = 1e-12
+                log_probs = torch.where(
+                    actions == 1,
+                    torch.log(probs[:, 1].clamp_min(eps)),
+                    torch.log(probs[:, 0].clamp_min(eps))
+                )
+            else:
+                log_probs = dist.log_prob(actions)
 
             # Normalize advantage to keep gradients stable across datasets/scales.
             denom = max(abs(baseline_cost), 1.0)
@@ -629,7 +656,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None, help="Path to the dataset file (e.g., formatted_dataset/berlin52.txt)")
     parser.add_argument("--train", action="store_true", help="Force training even if model exists")
     parser.add_argument("--no-train", action="store_true", help="Skip training, only inference")
-    parser.add_argument("--epochs", type=int, default=2000, help="Number of training epochs")
+    parser.add_argument("--epochs", type=int, default=5000, help="Number of training epochs")
     parser.add_argument("--variant-tag", type=str, default="", help="Tag for isolating model/log artifacts across test variants")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for Python/Torch/CUDA")
     parser.add_argument(
