@@ -84,6 +84,10 @@ def mean_std(values: List[float]) -> Tuple[float, float]:
     return statistics.mean(clean), statistics.stdev(clean)
 
 
+def parse_dataset_name_set(raw: str) -> set:
+    return {x.strip() for x in str(raw).split(",") if x.strip()}
+
+
 def parse_int_or_default(value: Any, default: int) -> int:
     try:
         return int(str(value).strip())
@@ -144,11 +148,6 @@ def load_existing_valid_rows(
     return existing_rows, missing_runs
 
 
-def is_reinforce_only_dataset(dataset_name: str) -> bool:
-    # Keep the same rule as existing script (d493 / rat783).
-    return ("493" in dataset_name) or ("783" in dataset_name)
-
-
 def run_dataset_jobs(
     dataset_path: Path,
     runs: int,
@@ -161,9 +160,10 @@ def run_dataset_jobs(
     train_timeout: int,
     solve_timeout: int,
     per_dataset_out_dir: Path,
+    reinforce_only_set: set,
 ) -> List[Dict[str, Any]]:
     dataset_name = dataset_path.stem
-    reinforce_only_dataset = dataset_name if is_reinforce_only_dataset(dataset_name) else ""
+    reinforce_only_dataset = dataset_name if dataset_name in reinforce_only_set else ""
 
     fieldnames_raw = [
         "dataset",
@@ -307,6 +307,11 @@ def main() -> int:
         default=str(repo_root / "results" / "main_dataset_no_berlin_parallel_raw_by_dataset"),
         help="Directory to store one raw CSV per dataset",
     )
+    parser.add_argument(
+        "--reinforce-only-datasets",
+        default="",
+        help="Comma-separated dataset names that should use pure REINFORCE (default: none)",
+    )
     parser.add_argument("--train-timeout", type=int, default=7200, help="Timeout seconds for one training run")
     parser.add_argument("--solve-timeout", type=int, default=1800, help="Timeout seconds for one C++ solve")
 
@@ -318,6 +323,7 @@ def main() -> int:
     raw_out = Path(args.raw_out)
     summary_out = Path(args.summary_out)
     per_dataset_out_dir = Path(args.per_dataset_out_dir)
+    reinforce_only_set = parse_dataset_name_set(args.reinforce_only_datasets)
 
     if not solver_py.exists():
         print(f"[ERROR] Solver not found: {solver_py}", file=sys.stderr)
@@ -382,6 +388,7 @@ def main() -> int:
                 args.train_timeout,
                 args.solve_timeout,
                 per_dataset_out_dir,
+                reinforce_only_set,
             ): dataset_path.stem
             for dataset_path in datasets
         }

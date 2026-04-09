@@ -62,6 +62,9 @@ class SVRAPConfig:
     ENTROPY_BONUS_WEIGHT = 0.01
     SEED = 42
     EXTRA_REINFORCE_ONLY_DATASETS = set()
+    FORCE_GUMBEL_DATASETS = set()
+    ENABLE_GUMBEL_FOR_LARGE_GRAPHS = True
+    GUMBEL_LARGE_GRAPH_MIN_N = 400
 
     # Paths
     MODEL_DIR = "models"
@@ -431,12 +434,15 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     
     # 3. Training Loop
     reinforce_only_datasets = {"d198"} | set(SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS)
-    large_graph_gumbel_topk_datasets = {"d493", "rat783"}
-    sparse_node_loss_datasets = {"d493", "rat783"}
+    force_gumbel_datasets = {"d493", "rat783"} | set(SVRAPConfig.FORCE_GUMBEL_DATASETS)
     use_reinforce_only = dataset_name in reinforce_only_datasets
-    use_gumbel_topk_sampling = dataset_name in large_graph_gumbel_topk_datasets
+    is_large_graph = env.n >= SVRAPConfig.GUMBEL_LARGE_GRAPH_MIN_N
+    use_gumbel_topk_sampling = (
+        dataset_name in force_gumbel_datasets
+        or (SVRAPConfig.ENABLE_GUMBEL_FOR_LARGE_GRAPHS and is_large_graph)
+    )
     fixed_k_route = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
-    node_loss_interval = 5 if dataset_name in sparse_node_loss_datasets else 1
+    node_loss_interval = 5 if use_gumbel_topk_sampling else 1
 
     if use_reinforce_only:
         print(f"Training mode for {dataset_name}: REINFORCE only")
@@ -533,6 +539,17 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             entropy_bonus = dist.entropy().mean()
             if use_reinforce_only:
                 loss = reinforce_loss
+            elif node_loss_interval > 1:
+                # Sparse schedule: compute node loss every N epochs, and use pure
+                # REINFORCE on intermediate epochs.
+                if should_compute_node_loss:
+                    loss = (
+                        SVRAPConfig.RL_LOSS_WEIGHT * reinforce_loss
+                        + SVRAPConfig.NODE_LOSS_WEIGHT * node_loss
+                        - SVRAPConfig.ENTROPY_BONUS_WEIGHT * entropy_bonus
+                    )
+                else:
+                    loss = reinforce_loss
             else:
                 loss = (
                     SVRAPConfig.RL_LOSS_WEIGHT * reinforce_loss
