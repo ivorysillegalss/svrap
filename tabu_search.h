@@ -61,6 +61,7 @@ public:
 
   const std::vector<int> &get_len_trend() const { return cost_trend_; }
   const std::vector<Point> &get_iter_solution() const { return iter_solution_; }
+  const std::vector<Point> &get_best_solution() const { return champion_solution_; }
   double get_best_cost() const { return best_cost_; }
 
 private:

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <string>
@@ -200,6 +201,15 @@ int main(int argc, char **argv) {
       }
     }
 
+    // Optional output path for per-node 0/1 route labels.
+    // Usage: svrap.exe <alpha> <dataset> <strategy> <k> <tbl> <q> <t> <entropy_weight> <label_output_path>
+    // Label format: one line per node, 1 means on-tour, 0 means off-tour.
+    std::string label_output_path;
+    if (argc >= 10) {
+      label_output_path = argv[9];
+      std::cout << "Label output enabled: " << label_output_path << std::endl;
+    }
+
     for (const auto &file : instance_files) {
       try {
         std::cout << "==============================\n";
@@ -379,6 +389,28 @@ int main(int argc, char **argv) {
         std::cout << "Tabu search finished in " << elapsed.count() << "s" << std::endl;
         std::cout << "Best cost for " << file << " = " << best_cost
                   << "\n";
+
+        if (!label_output_path.empty()) {
+          const auto &best_route = tabu_seracher.get_best_solution();
+          std::vector<int> labels(locations.size(), 0);
+          for (const auto &p : best_route) {
+            if (p.id < labels.size()) {
+              labels[p.id] = 1;
+            }
+          }
+
+          std::ofstream label_out(label_output_path);
+          if (!label_out.is_open()) {
+            std::cerr << "Warning: failed to open label output file: "
+                      << label_output_path << std::endl;
+          } else {
+            for (size_t i = 0; i < labels.size(); ++i) {
+              label_out << labels[i] << "\n";
+            }
+            std::cout << "Saved route labels to " << label_output_path
+                      << " (n=" << labels.size() << ")" << std::endl;
+          }
+        }
       } catch (const std::exception &e) {
         std::cerr << "Error while solving instance " << file << ": "
                   << e.what() << std::endl;
