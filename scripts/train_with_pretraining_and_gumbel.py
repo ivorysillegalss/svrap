@@ -109,6 +109,38 @@ def greedy_topk_actions(probs: torch.Tensor, ratio: float) -> torch.Tensor:
     return actions
 
 
+def get_counterfactual_interval(n_nodes: int) -> int:
+    if n_nodes > 500:
+        return 10
+    if n_nodes > 200:
+        return 5
+    return 1
+
+
+def compute_counterfactual_node_loss(
+    env: SVRAPEnvironment,
+    probs: torch.Tensor,
+    base_actions: torch.Tensor,
+    cf_temp: float,
+) -> Tuple[torch.Tensor, float]:
+    cf_gains = []
+    for i in range(env.n):
+        actions_on = base_actions.clone()
+        actions_on[i] = 1
+        cost_on, _ = env.evaluate_solution(actions_on)
+
+        actions_off = base_actions.clone()
+        actions_off[i] = 0
+        cost_off, _ = env.evaluate_solution(actions_off)
+
+        cf_gains.append(cost_off - cost_on)
+
+    cf_gains_t = torch.tensor(cf_gains, dtype=torch.float32, device=probs.device)
+    target_route_prob = torch.sigmoid(cf_gains_t / cf_temp)
+    node_loss = F.binary_cross_entropy(probs[:, 1], target_route_prob)
+    return node_loss, cf_gains_t.std(unbiased=False).item()
+
+
 def run_cpp_no_nn_once(
     exe_path: Path,
     alpha: float,
@@ -204,7 +236,9 @@ def build_pretraining_items(pretraining_dir: Path, labels_dir: Path, device: tor
         env = SVRAPEnvironment(str(dataset_path)).to(device)
         labels = load_binary_labels(label_path, env.n)
         node_feat, edge_feat = prepare_features(env, device)
-        items.append((dataset_path.stem, env, node_feat, edge_feat, labels))
+        fixed_k = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
+        cf_interval = get_counterfactual_interval(env.n)
+        items.append((dataset_path.stem, env, node_feat, edge_feat, labels, fixed_k, cf_interval))
     return items
 
 
@@ -215,6 +249,8 @@ def run_supervised_plus_rl_pretraining(
     lr: float,
     sup_weight: float,
     rl_weight: float,
+    cf_weight: float,
+    cf_temp: float,
     entropy_weight: float,
 ) -> None:
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -224,9 +260,10 @@ def run_supervised_plus_rl_pretraining(
         total_loss = 0.0
         total_sup = 0.0
         total_rl = 0.0
+        total_cf = 0.0
         total_cost = 0.0
 
-        for _, env, node_feat, edge_feat, labels in items:
+        for _, env, node_feat, edge_feat, labels, fixed_k, cf_interval in items:
             model.train()
             optimizer.zero_grad()
 
@@ -236,8 +273,7 @@ def run_supervised_plus_rl_pretraining(
 
             sup_loss = F.cross_entropy(logits, labels_t)
 
-            dist = Categorical(probs)
-            actions = dist.sample()
+            actions = sample_actions_gumbel_topk(probs[:, 1], fixed_k)
             cost, _ = env.evaluate_solution(actions)
 
             with torch.no_grad():
@@ -246,16 +282,40 @@ def run_supervised_plus_rl_pretraining(
 
             denom = max(abs(baseline_cost), 1.0)
             advantage = (cost - baseline_cost) / denom
-            reinforce_loss = dist.log_prob(actions).mean() * advantage
-            entropy = dist.entropy().mean()
+            eps = 1e-12
+            log_probs = torch.where(
+                actions == 1,
+                torch.log(probs[:, 1].clamp_min(eps)),
+                torch.log(probs[:, 0].clamp_min(eps)),
+            )
+            reinforce_loss = log_probs.mean() * advantage
+            entropy = Categorical(probs).entropy().mean()
 
-            loss = sup_weight * sup_loss + rl_weight * reinforce_loss - entropy_weight * entropy
+            should_compute_cf = (epoch % cf_interval == 0)
+            if should_compute_cf:
+                node_loss, cf_std = compute_counterfactual_node_loss(
+                    env=env,
+                    probs=probs,
+                    base_actions=greedy_actions,
+                    cf_temp=cf_temp,
+                )
+            else:
+                node_loss = torch.tensor(0.0, device=probs.device)
+                cf_std = 0.0
+
+            loss = (
+                sup_weight * sup_loss
+                + rl_weight * reinforce_loss
+                + cf_weight * node_loss
+                - entropy_weight * entropy
+            )
             loss.backward()
             optimizer.step()
 
             total_loss += float(loss.item())
             total_sup += float(sup_loss.item())
             total_rl += float(reinforce_loss.item())
+            total_cf += float(node_loss.item())
             total_cost += float(cost)
 
         n_graphs = len(items)
@@ -264,6 +324,7 @@ def run_supervised_plus_rl_pretraining(
             f"loss={total_loss / n_graphs:.4f} "
             f"sup={total_sup / n_graphs:.4f} "
             f"rl={total_rl / n_graphs:.4f} "
+            f"cf={total_cf / n_graphs:.4f} "
             f"cost={total_cost / n_graphs:.2f}"
         )
 
@@ -274,6 +335,8 @@ def run_gumbel_reinforce_finetune(
     output_dir: Path,
     finetune_epochs: int,
     lr: float,
+    cf_weight: float,
+    cf_temp: float,
     entropy_weight: float,
     device: torch.device,
 ) -> None:
@@ -293,6 +356,7 @@ def run_gumbel_reinforce_finetune(
         env = SVRAPEnvironment(str(dataset_path)).to(device)
         node_feat, edge_feat = prepare_features(env, device)
         fixed_k = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
+        cf_interval = get_counterfactual_interval(env.n)
 
         model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
         model.load_state_dict(base_state)
@@ -324,7 +388,19 @@ def run_gumbel_reinforce_finetune(
             reinforce_loss = log_probs.mean() * advantage
             entropy = Categorical(probs).entropy().mean()
 
-            loss = reinforce_loss - entropy_weight * entropy
+            should_compute_cf = (epoch % cf_interval == 0)
+            if should_compute_cf:
+                node_loss, cf_std = compute_counterfactual_node_loss(
+                    env=env,
+                    probs=probs,
+                    base_actions=greedy_actions,
+                    cf_temp=cf_temp,
+                )
+            else:
+                node_loss = torch.tensor(0.0, device=probs.device)
+                cf_std = 0.0
+
+            loss = reinforce_loss + cf_weight * node_loss - entropy_weight * entropy
             loss.backward()
             optimizer.step()
 
@@ -334,7 +410,9 @@ def run_gumbel_reinforce_finetune(
                 f"cost={cost:.2f} baseline={baseline_cost:.2f} "
                 f"p_route(mean={p_route.mean().item():.4f}, "
                 f"std={p_route.std(unbiased=False).item():.4f}, "
-                f"min={p_route.min().item():.4f}, max={p_route.max().item():.4f})"
+                f"min={p_route.min().item():.4f}, max={p_route.max().item():.4f}) "
+                f"cf_interval={cf_interval} cf_step={should_compute_cf} "
+                f"cf_loss={node_loss.item():.4f} cf_std={cf_std:.4f}"
             )
 
         save_path = output_dir / f"svrap_finetuned_{dataset_name}.pth"
@@ -371,8 +449,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "1) Generate 0/1 pseudo-labels on 30 pretraining graphs via C++ no_nn (10 runs each, keep best); "
-            "2) pretrain with supervised+RL over all 30 graphs per epoch (no batching); "
-            "3) fine-tune each main_dataset graph for 100 epochs with Gumbel REINFORCE."
+            "2) pretrain with supervised+RL+counterfactual over all 30 graphs per epoch (no batching); "
+            "3) fine-tune each main_dataset graph for 100 epochs with Gumbel REINFORCE + counterfactual."
         )
     )
     parser.add_argument("--repo-root", type=str, default=".")
@@ -389,6 +467,8 @@ def main() -> int:
     parser.add_argument("--lr-finetune", type=float, default=5e-4)
     parser.add_argument("--sup-weight", type=float, default=1.0)
     parser.add_argument("--rl-weight", type=float, default=0.25)
+    parser.add_argument("--cf-weight", type=float, default=1.0)
+    parser.add_argument("--cf-temp", type=float, default=500.0)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--skip-label-generation", action="store_true")
@@ -428,6 +508,8 @@ def main() -> int:
         lr=args.lr_pretrain,
         sup_weight=args.sup_weight,
         rl_weight=args.rl_weight,
+        cf_weight=args.cf_weight,
+        cf_temp=args.cf_temp,
         entropy_weight=args.entropy_weight,
     )
 
@@ -442,6 +524,8 @@ def main() -> int:
         output_dir=output_dir,
         finetune_epochs=args.finetune_epochs,
         lr=args.lr_finetune,
+        cf_weight=args.cf_weight,
+        cf_temp=args.cf_temp,
         entropy_weight=args.entropy_weight,
         device=device,
     )
