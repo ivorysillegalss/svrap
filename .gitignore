@@ -41,6 +41,7 @@
 /models/
 /graph/
 /raw_dataset/
+/pretraining_dataset/labels_no_nn/
 # /scripts/
 /results/
 
