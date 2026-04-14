@@ -1,4 +1,5 @@
 import argparse
+import io
 import random
 import re
 import shutil
@@ -52,6 +53,60 @@ PRETRAIN_FILES = [
     "st70.txt",
     "u159.txt",
 ]
+
+
+class _TeeStream(io.TextIOBase):
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, s):
+        for st in self._streams:
+            st.write(s)
+            st.flush()
+        return len(s)
+
+    def flush(self):
+        for st in self._streams:
+            st.flush()
+
+
+def resolve_repo_root(repo_root_arg: str) -> Path:
+    candidate = Path(repo_root_arg).resolve()
+    if (candidate / "svrap_solver.py").exists():
+        return candidate
+
+    # Fallback: script parent is repository root in this project layout.
+    if (REPO_DIR / "svrap_solver.py").exists():
+        print(
+            f"[warn] repo-root '{candidate}' does not look like project root; "
+            f"fallback to '{REPO_DIR}'"
+        )
+        return REPO_DIR
+
+    return candidate
+
+
+def resolve_existing_dir(path_arg: str, repo_root: Path, must_exist: bool = True) -> Path:
+    p = Path(path_arg)
+    if p.is_absolute():
+        resolved = p.resolve()
+        if must_exist and not resolved.exists():
+            raise FileNotFoundError(f"Directory not found: {resolved}")
+        return resolved
+
+    candidates = [
+        (repo_root / p).resolve(),
+        (Path.cwd() / p).resolve(),
+        (REPO_DIR / p).resolve(),
+    ]
+    for cand in candidates:
+        if cand.exists():
+            return cand
+
+    final_path = (repo_root / p).resolve()
+    if must_exist:
+        raise FileNotFoundError(f"Directory not found: {final_path}")
+    return final_path
 
 
 def parse_best_cost(output: str) -> float:
@@ -498,71 +553,92 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--pretrain-datasets", nargs="*", default=None, help="Optional subset for pretraining/label generation, e.g. berlin52 d198")
     parser.add_argument("--finetune-datasets", nargs="*", default=None, help="Optional subset for finetuning, e.g. berlin52")
+    parser.add_argument("--log-file", type=str, default="", help="Optional log file path. If set, script logs to console and this file.")
     parser.add_argument("--skip-label-generation", action="store_true")
 
     args = parser.parse_args()
-    repo_root = Path(args.repo_root).resolve()
+    repo_root = resolve_repo_root(args.repo_root)
 
-    pretraining_dir = (repo_root / args.pretraining_dir).resolve()
-    main_dataset_dir = (repo_root / args.main_dataset_dir).resolve()
-    labels_dir = (repo_root / args.labels_dir).resolve()
-    output_dir = (repo_root / "models").resolve()
-    pretrain_files = select_dataset_files(pretraining_dir, args.pretrain_datasets, PRETRAIN_FILES)
-    finetune_files = select_dataset_files(main_dataset_dir, args.finetune_datasets, None)
+    log_handle = None
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+    if args.log_file:
+        log_path = Path(args.log_file)
+        if not log_path.is_absolute():
+            log_path = (repo_root / log_path).resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("w", encoding="utf-8")
+        sys.stdout = _TeeStream(orig_stdout, log_handle)
+        sys.stderr = _TeeStream(orig_stderr, log_handle)
+        print(f"Logging to: {log_path}")
 
-    set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    try:
+        pretraining_dir = resolve_existing_dir(args.pretraining_dir, repo_root, must_exist=True)
+        main_dataset_dir = resolve_existing_dir(args.main_dataset_dir, repo_root, must_exist=True)
+        labels_dir = resolve_existing_dir(args.labels_dir, repo_root, must_exist=False)
+        output_dir = (repo_root / "models").resolve()
+        pretrain_files = select_dataset_files(pretraining_dir, args.pretrain_datasets, PRETRAIN_FILES)
+        finetune_files = select_dataset_files(main_dataset_dir, args.finetune_datasets, None)
 
-    exe_path = resolve_cpp_exe(repo_root, args.cpp_exe)
-    print(f"Using C++ solver: {exe_path}")
+        set_seed(args.seed)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
 
-    if not args.skip_label_generation:
-        generate_labels_with_cpp(
-            pretraining_dir=pretraining_dir,
-            labels_dir=labels_dir,
-            exe_path=exe_path,
-            alpha=args.alpha,
-            runs_per_graph=args.label_runs,
-            timeout_sec=args.cpp_timeout,
-            pretrain_files=pretrain_files,
+        exe_path = resolve_cpp_exe(repo_root, args.cpp_exe)
+        print(f"Using C++ solver: {exe_path}")
+
+        if not args.skip_label_generation:
+            generate_labels_with_cpp(
+                pretraining_dir=pretraining_dir,
+                labels_dir=labels_dir,
+                exe_path=exe_path,
+                alpha=args.alpha,
+                runs_per_graph=args.label_runs,
+                timeout_sec=args.cpp_timeout,
+                pretrain_files=pretrain_files,
+            )
+
+        model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
+        items = build_pretraining_items(pretraining_dir, labels_dir, device, pretrain_files)
+
+        run_supervised_plus_rl_pretraining(
+            model=model,
+            items=items,
+            pretrain_epochs=args.pretrain_epochs,
+            lr=args.lr_pretrain,
+            sup_weight=args.sup_weight,
+            rl_weight=args.rl_weight,
+            cf_weight=args.cf_weight,
+            cf_temp=args.cf_temp,
+            entropy_weight=args.entropy_weight,
         )
 
-    model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
-    items = build_pretraining_items(pretraining_dir, labels_dir, device, pretrain_files)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pretrained_path = output_dir / "svrap_pretrained_30graphs_sup_rl.pth"
+        torch.save({"model_state_dict": model.state_dict()}, pretrained_path)
+        print(f"Saved pretrained model: {pretrained_path}")
 
-    run_supervised_plus_rl_pretraining(
-        model=model,
-        items=items,
-        pretrain_epochs=args.pretrain_epochs,
-        lr=args.lr_pretrain,
-        sup_weight=args.sup_weight,
-        rl_weight=args.rl_weight,
-        cf_weight=args.cf_weight,
-        cf_temp=args.cf_temp,
-        entropy_weight=args.entropy_weight,
-    )
+        run_gumbel_reinforce_finetune(
+            pretrained_path=pretrained_path,
+            main_dataset_dir=main_dataset_dir,
+            output_dir=output_dir,
+            finetune_epochs=args.finetune_epochs,
+            lr=args.lr_finetune,
+            cf_weight=args.cf_weight,
+            cf_temp=args.cf_temp,
+            entropy_weight=args.entropy_weight,
+            device=device,
+            finetune_files=finetune_files,
+        )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    pretrained_path = output_dir / "svrap_pretrained_30graphs_sup_rl.pth"
-    torch.save({"model_state_dict": model.state_dict()}, pretrained_path)
-    print(f"Saved pretrained model: {pretrained_path}")
-
-    run_gumbel_reinforce_finetune(
-        pretrained_path=pretrained_path,
-        main_dataset_dir=main_dataset_dir,
-        output_dir=output_dir,
-        finetune_epochs=args.finetune_epochs,
-        lr=args.lr_finetune,
-        cf_weight=args.cf_weight,
-        cf_temp=args.cf_temp,
-        entropy_weight=args.entropy_weight,
-        device=device,
-        finetune_files=finetune_files,
-    )
-
-    print("All done.")
-    return 0
+        print("All done.")
+        return 0
+    finally:
+        if log_handle is not None:
+            log_handle.flush()
+            log_handle.close()
+            sys.stdout = orig_stdout
+            sys.stderr = orig_stderr
 
 
 if __name__ == "__main__":
