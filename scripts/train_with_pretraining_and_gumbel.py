@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -141,6 +141,21 @@ def compute_counterfactual_node_loss(
     return node_loss, cf_gains_t.std(unbiased=False).item()
 
 
+def select_dataset_files(base_dir: Path, requested: Optional[List[str]], default_files: Optional[List[str]]) -> List[str]:
+    if requested:
+        selected = []
+        for name in requested:
+            fname = name if name.endswith(".txt") else f"{name}.txt"
+            p = base_dir / fname
+            if not p.exists():
+                raise FileNotFoundError(f"Requested dataset not found: {p}")
+            selected.append(fname)
+        return selected
+    if default_files is not None:
+        return list(default_files)
+    return sorted(p.name for p in base_dir.glob("*.txt"))
+
+
 def run_cpp_no_nn_once(
     exe_path: Path,
     alpha: float,
@@ -182,10 +197,11 @@ def generate_labels_with_cpp(
     alpha: float,
     runs_per_graph: int,
     timeout_sec: int,
+    pretrain_files: List[str],
 ) -> None:
     labels_dir.mkdir(parents=True, exist_ok=True)
 
-    for fname in PRETRAIN_FILES:
+    for fname in pretrain_files:
         dataset_path = pretraining_dir / fname
         if not dataset_path.exists():
             raise FileNotFoundError(f"Missing pretraining dataset: {dataset_path}")
@@ -228,9 +244,14 @@ def generate_labels_with_cpp(
         print(f"[label] keep best for {fname}: cost={best_cost:.2f}, file={final_label_path}")
 
 
-def build_pretraining_items(pretraining_dir: Path, labels_dir: Path, device: torch.device):
+def build_pretraining_items(
+    pretraining_dir: Path,
+    labels_dir: Path,
+    device: torch.device,
+    pretrain_files: List[str],
+):
     items = []
-    for fname in PRETRAIN_FILES:
+    for fname in pretrain_files:
         dataset_path = pretraining_dir / fname
         label_path = labels_dir / f"{dataset_path.stem}.labels.txt"
         env = SVRAPEnvironment(str(dataset_path)).to(device)
@@ -339,13 +360,17 @@ def run_gumbel_reinforce_finetune(
     cf_temp: float,
     entropy_weight: float,
     device: torch.device,
+    finetune_files: Optional[List[str]] = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ckpt = torch.load(pretrained_path, map_location=device)
     base_state = ckpt["model_state_dict"]
 
-    main_files = sorted(main_dataset_dir.glob("*.txt"))
+    if finetune_files:
+        main_files = [main_dataset_dir / x for x in finetune_files]
+    else:
+        main_files = sorted(main_dataset_dir.glob("*.txt"))
     if not main_files:
         raise FileNotFoundError(f"No .txt datasets found in {main_dataset_dir}")
 
@@ -471,6 +496,8 @@ def main() -> int:
     parser.add_argument("--cf-temp", type=float, default=500.0)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--pretrain-datasets", nargs="*", default=None, help="Optional subset for pretraining/label generation, e.g. berlin52 d198")
+    parser.add_argument("--finetune-datasets", nargs="*", default=None, help="Optional subset for finetuning, e.g. berlin52")
     parser.add_argument("--skip-label-generation", action="store_true")
 
     args = parser.parse_args()
@@ -480,6 +507,8 @@ def main() -> int:
     main_dataset_dir = (repo_root / args.main_dataset_dir).resolve()
     labels_dir = (repo_root / args.labels_dir).resolve()
     output_dir = (repo_root / "models").resolve()
+    pretrain_files = select_dataset_files(pretraining_dir, args.pretrain_datasets, PRETRAIN_FILES)
+    finetune_files = select_dataset_files(main_dataset_dir, args.finetune_datasets, None)
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -496,10 +525,11 @@ def main() -> int:
             alpha=args.alpha,
             runs_per_graph=args.label_runs,
             timeout_sec=args.cpp_timeout,
+            pretrain_files=pretrain_files,
         )
 
     model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
-    items = build_pretraining_items(pretraining_dir, labels_dir, device)
+    items = build_pretraining_items(pretraining_dir, labels_dir, device, pretrain_files)
 
     run_supervised_plus_rl_pretraining(
         model=model,
@@ -528,6 +558,7 @@ def main() -> int:
         cf_temp=args.cf_temp,
         entropy_weight=args.entropy_weight,
         device=device,
+        finetune_files=finetune_files,
     )
 
     print("All done.")
