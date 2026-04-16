@@ -61,13 +61,25 @@ class _TeeStream(io.TextIOBase):
 
     def write(self, s):
         for st in self._streams:
-            st.write(s)
-            st.flush()
+            if getattr(st, "closed", False):
+                continue
+            try:
+                st.write(s)
+                st.flush()
+            except ValueError:
+                # Can happen during interpreter teardown if a stream closes early.
+                continue
         return len(s)
 
     def flush(self):
         for st in self._streams:
-            st.flush()
+            if getattr(st, "closed", False):
+                continue
+            try:
+                st.flush()
+            except ValueError:
+                # Benign at process shutdown for already-closed file handles.
+                continue
 
 
 def resolve_repo_root(repo_root_arg: str) -> Path:
@@ -324,10 +336,6 @@ def run_supervised_plus_rl_pretraining(
     pretrain_epochs: int,
     lr: float,
     sup_weight: float,
-    rl_weight: float,
-    cf_weight: float,
-    cf_temp: float,
-    entropy_weight: float,
 ) -> None:
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -335,11 +343,9 @@ def run_supervised_plus_rl_pretraining(
         random.shuffle(items)
         total_loss = 0.0
         total_sup = 0.0
-        total_rl = 0.0
-        total_cf = 0.0
         total_cost = 0.0
 
-        for _, env, node_feat, edge_feat, labels, fixed_k, cf_interval in items:
+        for _, env, node_feat, edge_feat, labels, _, _ in items:
             model.train()
             optimizer.zero_grad()
 
@@ -349,59 +355,24 @@ def run_supervised_plus_rl_pretraining(
 
             sup_loss = F.cross_entropy(logits, labels_t)
 
-            actions = sample_actions_gumbel_topk(probs[:, 1], fixed_k)
-            cost, _ = env.evaluate_solution(actions)
-
-            with torch.no_grad():
-                greedy_actions = greedy_topk_actions(probs, SVRAPConfig.TOP_K_ROUTE_RATIO)
-                baseline_cost, _ = env.evaluate_solution(greedy_actions)
-
-            denom = max(abs(baseline_cost), 1.0)
-            advantage = (cost - baseline_cost) / denom
-            eps = 1e-12
-            log_probs = torch.where(
-                actions == 1,
-                torch.log(probs[:, 1].clamp_min(eps)),
-                torch.log(probs[:, 0].clamp_min(eps)),
-            )
-            reinforce_loss = log_probs.mean() * advantage
-            entropy = Categorical(probs).entropy().mean()
-
-            should_compute_cf = (epoch % cf_interval == 0)
-            if should_compute_cf:
-                node_loss, cf_std = compute_counterfactual_node_loss(
-                    env=env,
-                    probs=probs,
-                    base_actions=greedy_actions,
-                    cf_temp=cf_temp,
-                )
-            else:
-                node_loss = torch.tensor(0.0, device=probs.device)
-                cf_std = 0.0
-
-            loss = (
-                sup_weight * sup_loss
-                + rl_weight * reinforce_loss
-                + cf_weight * node_loss
-                - entropy_weight * entropy
-            )
+            # Pretraining uses pure supervised loss only.
+            loss = sup_weight * sup_loss
             loss.backward()
             optimizer.step()
 
             total_loss += float(loss.item())
             total_sup += float(sup_loss.item())
-            total_rl += float(reinforce_loss.item())
-            total_cf += float(node_loss.item())
-            total_cost += float(cost)
+            with torch.no_grad():
+                greedy_actions = greedy_topk_actions(probs, SVRAPConfig.TOP_K_ROUTE_RATIO)
+                greedy_cost, _ = env.evaluate_solution(greedy_actions)
+            total_cost += float(greedy_cost)
 
         n_graphs = len(items)
         print(
             f"[pretrain] epoch={epoch:03d} "
             f"loss={total_loss / n_graphs:.4f} "
             f"sup={total_sup / n_graphs:.4f} "
-            f"rl={total_rl / n_graphs:.4f} "
-            f"cf={total_cf / n_graphs:.4f} "
-            f"cost={total_cost / n_graphs:.2f}"
+            f"greedy_cost={total_cost / n_graphs:.2f}"
         )
 
 
@@ -435,7 +406,6 @@ def run_gumbel_reinforce_finetune(
 
         env = SVRAPEnvironment(str(dataset_path)).to(device)
         node_feat, edge_feat = prepare_features(env, device)
-        fixed_k = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
         cf_interval = get_counterfactual_interval(env.n)
 
         model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
@@ -448,20 +418,16 @@ def run_gumbel_reinforce_finetune(
 
             logits = model(node_feat, edge_feat).squeeze(0)
             probs = F.softmax(logits, dim=-1)
+            dist = Categorical(probs)
 
-            actions = sample_actions_gumbel_topk(probs[:, 1], fixed_k)
+            actions = dist.sample()
             cost, _ = env.evaluate_solution(actions)
 
             with torch.no_grad():
                 greedy_actions = greedy_topk_actions(probs, SVRAPConfig.TOP_K_ROUTE_RATIO)
                 baseline_cost, _ = env.evaluate_solution(greedy_actions)
 
-            eps = 1e-12
-            log_probs = torch.where(
-                actions == 1,
-                torch.log(probs[:, 1].clamp_min(eps)),
-                torch.log(probs[:, 0].clamp_min(eps)),
-            )
+            log_probs = dist.log_prob(actions)
 
             denom = max(abs(baseline_cost), 1.0)
             advantage = (cost - baseline_cost) / denom
@@ -529,8 +495,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "1) Generate 0/1 pseudo-labels on 30 pretraining graphs via C++ no_nn (10 runs each, keep best); "
-            "2) pretrain with supervised+RL+counterfactual over all 30 graphs per epoch (no batching); "
-            "3) fine-tune each main_dataset graph for 100 epochs with Gumbel REINFORCE + counterfactual."
+            "2) pretrain with pure supervised loss over all 30 graphs per epoch (no batching); "
+            "3) fine-tune each main_dataset graph for 100 epochs with categorical REINFORCE + counterfactual."
         )
     )
     parser.add_argument("--repo-root", type=str, default=".")
@@ -607,10 +573,6 @@ def main() -> int:
             pretrain_epochs=args.pretrain_epochs,
             lr=args.lr_pretrain,
             sup_weight=args.sup_weight,
-            rl_weight=args.rl_weight,
-            cf_weight=args.cf_weight,
-            cf_temp=args.cf_temp,
-            entropy_weight=args.entropy_weight,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -635,10 +597,11 @@ def main() -> int:
         return 0
     finally:
         if log_handle is not None:
-            log_handle.flush()
-            log_handle.close()
             sys.stdout = orig_stdout
             sys.stderr = orig_stderr
+            if not log_handle.closed:
+                log_handle.flush()
+                log_handle.close()
 
 
 if __name__ == "__main__":
