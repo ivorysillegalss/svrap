@@ -18,6 +18,35 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-Executable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$RepoRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        throw "Executable name cannot be empty."
+    }
+
+    if ([System.IO.Path]::IsPathRooted($Name)) {
+        if (Test-Path $Name) {
+            return (Resolve-Path $Name).Path
+        }
+    } else {
+        $candidate = Join-Path $RepoRoot $Name
+        if (Test-Path $candidate) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -ne $cmd) {
+        return $cmd.Source
+    }
+
+    throw "Executable not found: $Name"
+}
+
 function Invoke-Step {
     param(
         [string]$Title,
@@ -37,14 +66,11 @@ function Invoke-Step {
 $repo = Resolve-Path $RepoRoot
 Set-Location $repo
 
-if (-not (Test-Path $PythonExe)) {
-    throw "Python executable not found: $PythonExe"
-}
+$resolvedPythonExe = Resolve-Executable -Name $PythonExe -RepoRoot $repo
+$resolvedCppExe = Resolve-Executable -Name $CppExe -RepoRoot $repo
 
-$cppPath = if ([System.IO.Path]::IsPathRooted($CppExe)) { $CppExe } else { Join-Path $repo $CppExe }
-if (-not (Test-Path $cppPath)) {
-    throw "C++ executable not found: $cppPath"
-}
+Write-Host "Using Python executable: $resolvedPythonExe"
+Write-Host "Using C++ executable: $resolvedCppExe"
 
 $resultDir = Join-Path $repo "results"
 if (-not (Test-Path $resultDir)) {
@@ -86,9 +112,9 @@ if ($SkipLabelGeneration) {
     $trainArgs += "--skip-label-generation"
 }
 
-Invoke-Step -Title "Stage A: Label + Pretrain + Finetune (all main_dataset)" -Exe $PythonExe -Args $trainArgs
+Invoke-Step -Title "Stage A: Label + Pretrain + Finetune (all main_dataset)" -Exe $resolvedPythonExe -Args $trainArgs
 
-Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $PythonExe -Args @(
+Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $resolvedPythonExe -Args @(
     "scripts/report_proute_diversification.py",
     "--repo-root", ".",
     "--dataset-dir", "main_dataset",
@@ -97,13 +123,13 @@ Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $PythonExe -A
     "--csv-out", $divCsv
 )
 
-Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $PythonExe -Args @(
+Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $resolvedPythonExe -Args @(
     "scripts/compare_guided_vs_no_nn_gap.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
     "--models-dir", "models",
     "--model-prefix", "svrap_finetuned_",
-    "--exe", $CppExe,
+    "--exe", $resolvedCppExe,
     "--alpha", "$Alpha",
     "--runs", "$GuidedVsNoNnRuns",
     "--timeout", "$CppTimeout",
@@ -113,7 +139,7 @@ Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $PythonEx
     "--seed", "$Seed"
 )
 
-Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $PythonExe -Args @(
+Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $resolvedPythonExe -Args @(
     "scripts/infer_main_dataset_p_route.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
@@ -124,7 +150,7 @@ Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $Py
     "--seed", "$Seed"
 )
 
-Invoke-Step -Title "Stage E: Heatmap export (all main_dataset)" -Exe $PythonExe -Args @(
+Invoke-Step -Title "Stage E: Heatmap export (all main_dataset)" -Exe $resolvedPythonExe -Args @(
     "scripts/export_p_route_heatmaps_and_md.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
