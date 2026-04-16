@@ -1,5 +1,5 @@
 param(
-    [string]$PythonExe = "C:/Users/chenz/miniconda3/envs/altr-py310/python.exe",
+    [string]$PythonExe = "python",
     [string]$RepoRoot = ".",
     [string]$CppExe = "svrap.exe",
     [int]$PretrainEpochs = 200,
@@ -77,7 +77,7 @@ Write-Host "[C1] Report p_route for finetuned berlin52"
     --repo-root . `
     --dataset-dir main_dataset `
     --datasets berlin52 `
-    --model-path-template models/svrap_finetuned_{dataset}.pth `
+    --model-path-template 'models/svrap_finetuned_{dataset}.pth' `
     --title finetuned_on_berlin52 `
     --csv-out $fineCsv
 if ($LASTEXITCODE -ne 0) {
@@ -88,7 +88,7 @@ Write-Host "[C2] Report p_route for all existing finetuned datasets (single comm
 & $PythonExe "scripts/report_proute_diversification.py" `
     --repo-root . `
     --dataset-dir main_dataset `
-    --model-path-template models/svrap_finetuned_{dataset}.pth `
+    --model-path-template 'models/svrap_finetuned_{dataset}.pth' `
     --title all_existing_finetuned_models `
     --csv-out $allFineCsv
 if ($LASTEXITCODE -ne 0) {
