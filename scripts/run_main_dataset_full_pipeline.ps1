@@ -51,13 +51,13 @@ function Invoke-Step {
     param(
         [string]$Title,
         [string]$Exe,
-        [string[]]$Args
+        [string[]]$CommandArgs
     )
 
     Write-Host ""
     Write-Host "==== $Title ===="
-    Write-Host "$Exe $($Args -join ' ')"
-    & $Exe @Args
+    Write-Host "$Exe $($CommandArgs -join ' ')"
+    & $Exe @CommandArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Step failed: $Title (exit code=$LASTEXITCODE)"
     }
@@ -112,9 +112,9 @@ if ($SkipLabelGeneration) {
     $trainArgs += "--skip-label-generation"
 }
 
-Invoke-Step -Title "Stage A: Label + Pretrain + Finetune (all main_dataset)" -Exe $resolvedPythonExe -Args $trainArgs
+Invoke-Step -Title "Stage A: Label + Pretrain + Finetune (all main_dataset)" -Exe $resolvedPythonExe -CommandArgs $trainArgs
 
-Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $resolvedPythonExe -Args @(
+Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $resolvedPythonExe -CommandArgs @(
     "scripts/report_proute_diversification.py",
     "--repo-root", ".",
     "--dataset-dir", "main_dataset",
@@ -123,7 +123,7 @@ Invoke-Step -Title "Stage B: p_route diversification summary" -Exe $resolvedPyth
     "--csv-out", $divCsv
 )
 
-Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $resolvedPythonExe -Args @(
+Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $resolvedPythonExe -CommandArgs @(
     "scripts/compare_guided_vs_no_nn_gap.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
@@ -139,7 +139,7 @@ Invoke-Step -Title "Stage C: Guided(full) vs no_nn, 10 runs each" -Exe $resolved
     "--seed", "$Seed"
 )
 
-Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $resolvedPythonExe -Args @(
+Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $resolvedPythonExe -CommandArgs @(
     "scripts/infer_main_dataset_p_route.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
@@ -150,7 +150,7 @@ Invoke-Step -Title "Stage D: Inference stats export (all main_dataset)" -Exe $re
     "--seed", "$Seed"
 )
 
-Invoke-Step -Title "Stage E: Heatmap export (all main_dataset)" -Exe $resolvedPythonExe -Args @(
+Invoke-Step -Title "Stage E: Heatmap export (all main_dataset)" -Exe $resolvedPythonExe -CommandArgs @(
     "scripts/export_p_route_heatmaps_and_md.py",
     "--repo-root", ".",
     "--main-dataset-dir", "main_dataset",
