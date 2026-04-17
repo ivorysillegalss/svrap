@@ -385,6 +385,8 @@ def run_gumbel_reinforce_finetune(
     cf_weight: float,
     cf_temp: float,
     entropy_weight: float,
+    route_std_target: float,
+    route_std_reg_weight: float,
     device: torch.device,
     finetune_files: Optional[List[str]] = None,
 ) -> None:
@@ -433,6 +435,9 @@ def run_gumbel_reinforce_finetune(
             advantage = (cost - baseline_cost) / denom
             reinforce_loss = log_probs.mean() * advantage
             entropy = Categorical(probs).entropy().mean()
+            route_std = probs[:, 1].std(unbiased=False)
+            std_shortfall = F.relu(route_std_target - route_std)
+            route_std_penalty = std_shortfall * std_shortfall
 
             should_compute_cf = (epoch % cf_interval == 0)
             if should_compute_cf:
@@ -446,7 +451,12 @@ def run_gumbel_reinforce_finetune(
                 node_loss = torch.tensor(0.0, device=probs.device)
                 cf_std = 0.0
 
-            loss = reinforce_loss + cf_weight * node_loss - entropy_weight * entropy
+            loss = (
+                reinforce_loss
+                + cf_weight * node_loss
+                - entropy_weight * entropy
+                + route_std_reg_weight * route_std_penalty
+            )
             loss.backward()
             optimizer.step()
 
@@ -458,7 +468,8 @@ def run_gumbel_reinforce_finetune(
                 f"std={p_route.std(unbiased=False).item():.4f}, "
                 f"min={p_route.min().item():.4f}, max={p_route.max().item():.4f}) "
                 f"cf_interval={cf_interval} cf_step={should_compute_cf} "
-                f"cf_loss={node_loss.item():.4f} cf_std={cf_std:.4f}"
+                f"cf_loss={node_loss.item():.4f} cf_std={cf_std:.4f} "
+                f"std_penalty={route_std_penalty.item():.6f}"
             )
 
         save_path = output_dir / f"svrap_finetuned_{dataset_name}.pth"
@@ -516,11 +527,15 @@ def main() -> int:
     parser.add_argument("--cf-weight", type=float, default=1.0)
     parser.add_argument("--cf-temp", type=float, default=500.0)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
+    parser.add_argument("--route-std-target", type=float, default=0.02, help="Target lower bound for p_route std during finetune")
+    parser.add_argument("--route-std-reg-weight", type=float, default=0.0, help="Weight for variance-floor penalty during finetune")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--pretrain-datasets", nargs="*", default=None, help="Optional subset for pretraining/label generation, e.g. berlin52 d198")
     parser.add_argument("--finetune-datasets", nargs="*", default=None, help="Optional subset for finetuning, e.g. berlin52")
     parser.add_argument("--log-file", type=str, default="", help="Optional log file path. If set, script logs to console and this file.")
     parser.add_argument("--skip-label-generation", action="store_true")
+    parser.add_argument("--skip-pretraining", action="store_true", help="Skip pretraining and only run finetuning from an existing pretrained model")
+    parser.add_argument("--pretrained-model-path", type=str, default="", help="Optional path to pretrained checkpoint for finetuning")
 
     args = parser.parse_args()
     repo_root = resolve_repo_root(args.repo_root)
@@ -553,7 +568,10 @@ def main() -> int:
         exe_path = resolve_cpp_exe(repo_root, args.cpp_exe)
         print(f"Using C++ solver: {exe_path}")
 
-        if not args.skip_label_generation:
+        if args.skip_pretraining and not args.skip_label_generation:
+            print("[warn] --skip-pretraining is set; label generation is unnecessary. Skipping label generation.")
+
+        if (not args.skip_pretraining) and (not args.skip_label_generation):
             generate_labels_with_cpp(
                 pretraining_dir=pretraining_dir,
                 labels_dir=labels_dir,
@@ -564,21 +582,36 @@ def main() -> int:
                 pretrain_files=pretrain_files,
             )
 
-        model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
-        items = build_pretraining_items(pretraining_dir, labels_dir, device, pretrain_files)
-
-        run_supervised_plus_rl_pretraining(
-            model=model,
-            items=items,
-            pretrain_epochs=args.pretrain_epochs,
-            lr=args.lr_pretrain,
-            sup_weight=args.sup_weight,
-        )
-
         output_dir.mkdir(parents=True, exist_ok=True)
-        pretrained_path = output_dir / "svrap_pretrained_30graphs_sup_rl.pth"
-        torch.save({"model_state_dict": model.state_dict()}, pretrained_path)
-        print(f"Saved pretrained model: {pretrained_path}")
+        if args.skip_pretraining:
+            if args.pretrained_model_path:
+                pretrained_path = Path(args.pretrained_model_path)
+                if not pretrained_path.is_absolute():
+                    pretrained_path = (repo_root / pretrained_path).resolve()
+            else:
+                pretrained_path = output_dir / "svrap_pretrained_30graphs_sup_rl.pth"
+
+            if not pretrained_path.exists():
+                raise FileNotFoundError(
+                    f"Pretrained model not found for finetuning: {pretrained_path}. "
+                    "Provide --pretrained-model-path or run without --skip-pretraining first."
+                )
+            print(f"Using existing pretrained model: {pretrained_path}")
+        else:
+            model = SVRAPNetwork(SVRAPConfig.EMBED_DIM, SVRAPConfig.N_HEADS).to(device)
+            items = build_pretraining_items(pretraining_dir, labels_dir, device, pretrain_files)
+
+            run_supervised_plus_rl_pretraining(
+                model=model,
+                items=items,
+                pretrain_epochs=args.pretrain_epochs,
+                lr=args.lr_pretrain,
+                sup_weight=args.sup_weight,
+            )
+
+            pretrained_path = output_dir / "svrap_pretrained_30graphs_sup_rl.pth"
+            torch.save({"model_state_dict": model.state_dict()}, pretrained_path)
+            print(f"Saved pretrained model: {pretrained_path}")
 
         run_gumbel_reinforce_finetune(
             pretrained_path=pretrained_path,
@@ -589,6 +622,8 @@ def main() -> int:
             cf_weight=args.cf_weight,
             cf_temp=args.cf_temp,
             entropy_weight=args.entropy_weight,
+            route_std_target=args.route_std_target,
+            route_std_reg_weight=args.route_std_reg_weight,
             device=device,
             finetune_files=finetune_files,
         )

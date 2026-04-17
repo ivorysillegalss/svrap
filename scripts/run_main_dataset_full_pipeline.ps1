@@ -9,10 +9,17 @@ param(
     [int]$GuidedVsNoNnRuns = 10,
     [int]$CppTimeout = 1800,
     [int]$Seed = 42,
+    [double]$LrPretrain = 0.001,
+    [double]$LrFinetune = 0.0005,
     [double]$SupWeight = 1.0,
     [double]$CfWeight = 1.0,
     [double]$CfTemp = 500.0,
     [double]$EntropyWeight = 0.01,
+    [double]$RouteStdTarget = 0.02,
+    [double]$RouteStdRegWeight = 0.0,
+    [switch]$SkipPretraining,
+    [string]$PretrainedModelPath = "",
+    [switch]$UseAntiCollapseTuning,
     [switch]$SkipLabelGeneration
 )
 
@@ -66,6 +73,20 @@ function Invoke-Step {
 $repo = Resolve-Path $RepoRoot
 Set-Location $repo
 
+# Optional preset for mitigating near-constant p_route collapse.
+if ($UseAntiCollapseTuning) {
+    if (-not $PSBoundParameters.ContainsKey('LrPretrain')) { $LrPretrain = 0.0005 }
+    if (-not $PSBoundParameters.ContainsKey('LrFinetune')) { $LrFinetune = 0.0003 }
+    if (-not $PSBoundParameters.ContainsKey('CfWeight')) { $CfWeight = 2.0 }
+    if (-not $PSBoundParameters.ContainsKey('CfTemp')) { $CfTemp = 60.0 }
+    if (-not $PSBoundParameters.ContainsKey('EntropyWeight')) { $EntropyWeight = 0.0 }
+    if (-not $PSBoundParameters.ContainsKey('RouteStdTarget')) { $RouteStdTarget = 0.05 }
+    if (-not $PSBoundParameters.ContainsKey('RouteStdRegWeight')) { $RouteStdRegWeight = 2.0 }
+    Write-Host "Using anti-collapse tuning preset:"
+    Write-Host "  lr_pretrain=$LrPretrain, lr_finetune=$LrFinetune, cf_weight=$CfWeight, cf_temp=$CfTemp, entropy_weight=$EntropyWeight"
+    Write-Host "  route_std_target=$RouteStdTarget, route_std_reg_weight=$RouteStdRegWeight"
+}
+
 $resolvedPythonExe = Resolve-Executable -Name $PythonExe -RepoRoot $repo
 $resolvedCppExe = Resolve-Executable -Name $CppExe -RepoRoot $repo
 
@@ -101,15 +122,25 @@ $trainArgs = @(
     "--cpp-timeout", "$CppTimeout",
     "--pretrain-epochs", "$PretrainEpochs",
     "--finetune-epochs", "$FinetuneEpochs",
+    "--lr-pretrain", "$LrPretrain",
+    "--lr-finetune", "$LrFinetune",
     "--sup-weight", "$SupWeight",
     "--cf-weight", "$CfWeight",
     "--cf-temp", "$CfTemp",
     "--entropy-weight", "$EntropyWeight",
+    "--route-std-target", "$RouteStdTarget",
+    "--route-std-reg-weight", "$RouteStdRegWeight",
     "--seed", "$Seed",
     "--log-file", $trainLog
 )
 if ($SkipLabelGeneration) {
     $trainArgs += "--skip-label-generation"
+}
+if ($SkipPretraining) {
+    $trainArgs += "--skip-pretraining"
+}
+if (-not [string]::IsNullOrWhiteSpace($PretrainedModelPath)) {
+    $trainArgs += @("--pretrained-model-path", $PretrainedModelPath)
 }
 
 Invoke-Step -Title "Stage A: Label + Pretrain + Finetune (all main_dataset)" -Exe $resolvedPythonExe -CommandArgs $trainArgs
