@@ -1,0 +1,5 @@
+mean_route: 0.0552220769
+std_route: 0.2254820345
+min_route: 0.0000890000
+max_route: 0.9998490000
+best_train_cost: 26618.6568000000

@@ -62,9 +62,6 @@ class SVRAPConfig:
     ENTROPY_BONUS_WEIGHT = 0.01
     SEED = 42
     EXTRA_REINFORCE_ONLY_DATASETS = set()
-    FORCE_GUMBEL_DATASETS = set()
-    ENABLE_GUMBEL_FOR_LARGE_GRAPHS = True
-    GUMBEL_LARGE_GRAPH_MIN_N = 400
 
     # Paths
     MODEL_DIR = "models"
@@ -385,17 +382,6 @@ class SVRAPNetwork(nn.Module):
 # ==========================================
 
 def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
-    def sample_actions_gumbel_topk(route_probs: torch.Tensor, k: int) -> torch.Tensor:
-        """Sample exactly k route nodes using independent Gumbel noise per node."""
-        eps = 1e-12
-        u = torch.rand_like(route_probs).clamp_(min=eps, max=1.0 - eps)
-        gumbel = -torch.log(-torch.log(u))
-        scores = torch.log(route_probs.clamp_min(eps)) + gumbel
-        topk_indices = torch.topk(scores, k=k).indices
-        actions = torch.zeros(route_probs.size(0), dtype=torch.long, device=route_probs.device)
-        actions[topk_indices] = 1
-        return actions
-
     # Determine dataset name for model saving
     if dataset_path:
         dataset_name = os.path.splitext(os.path.basename(dataset_path))[0]
@@ -434,22 +420,13 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
     
     # 3. Training Loop
     reinforce_only_datasets = {"d198"} | set(SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS)
-    force_gumbel_datasets = {"d493", "rat783"} | set(SVRAPConfig.FORCE_GUMBEL_DATASETS)
     use_reinforce_only = dataset_name in reinforce_only_datasets
-    is_large_graph = env.n >= SVRAPConfig.GUMBEL_LARGE_GRAPH_MIN_N
-    use_gumbel_topk_sampling = (
-        dataset_name in force_gumbel_datasets
-        or (SVRAPConfig.ENABLE_GUMBEL_FOR_LARGE_GRAPHS and is_large_graph)
-    )
-    fixed_k_route = max(2, int(env.n * SVRAPConfig.TOP_K_ROUTE_RATIO))
-    node_loss_interval = 5 if use_gumbel_topk_sampling else 1
+    node_loss_interval = 1
 
     if use_reinforce_only:
         print(f"Training mode for {dataset_name}: REINFORCE only")
     elif node_loss_interval > 1:
         print(f"Training mode for {dataset_name}: node loss every {node_loss_interval} epochs")
-    if use_gumbel_topk_sampling:
-        print(f"Training mode for {dataset_name}: Gumbel Top-K sampling with fixed k={fixed_k_route}")
     if train_model:
         print(f"Starting Training for {dataset_name}...")
         optimizer = optim.Adam(model.parameters(), lr=SVRAPConfig.LR)
@@ -473,10 +450,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
             # Sample binary actions directly from binary model output.
             probs = F.softmax(logits, dim=-1)
             dist = Categorical(probs)
-            if use_gumbel_topk_sampling:
-                actions = sample_actions_gumbel_topk(probs[:, 1], fixed_k_route)
-            else:
-                actions = dist.sample() # (N,) in {0, 1}
+            actions = dist.sample() # (N,) in {0, 1}
             
             # Evaluate sampled actions
             cost, _ = env.evaluate_solution(actions)
@@ -491,15 +465,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 baseline_cost, _ = env.evaluate_solution(greedy_actions)
             
             # REINFORCE Loss
-            if use_gumbel_topk_sampling:
-                eps = 1e-12
-                log_probs = torch.where(
-                    actions == 1,
-                    torch.log(probs[:, 1].clamp_min(eps)),
-                    torch.log(probs[:, 0].clamp_min(eps))
-                )
-            else:
-                log_probs = dist.log_prob(actions)
+            log_probs = dist.log_prob(actions)
 
             # Normalize advantage to keep gradients stable across datasets/scales.
             denom = max(abs(baseline_cost), 1.0)
