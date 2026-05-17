@@ -55,6 +55,21 @@ def mean_std(values: List[float]) -> Tuple[float, float]:
     return statistics.mean(clean), statistics.stdev(clean)
 
 
+def discover_datasets(dataset_dir: Path, dataset_names: str | None) -> List[Path]:
+    if dataset_names:
+        names = [name.strip() for name in dataset_names.split(",") if name.strip()]
+        datasets = [dataset_dir / f"{name}.txt" for name in names]
+    else:
+        datasets = sorted(dataset_dir.glob("*.txt"))
+
+    missing = [path for path in datasets if not path.exists()]
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"Missing dataset file(s): {missing_text}")
+
+    return datasets
+
+
 def format_float(value: float, digits: int = 2) -> str:
     if value != value:
         return "NaN"
@@ -108,72 +123,70 @@ def run_solver_once(
 
 def write_markdown_table(summary_rows: List[Dict[str, object]], out_md: Path) -> None:
     lines = [
-        "| Strategy | KNN | Runs | Successful Runs | Mean Time (s) | Std Time (s) | Mean Best Cost | Std Best Cost |",
+        "| Dataset | Runs | Full Time (s) | No-KNN Time (s) | Time Improvement (%) | Full Cost | No-KNN Cost | Cost Delta |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary_rows:
         lines.append(
-            "| {strategy} | {knn} | {runs} | {valid_runs} | {mean_time} | {std_time} | {mean_cost} | {std_cost} |".format(
-                strategy=row["Strategy"],
-                knn=row["KNN"],
+            "| {dataset} | {runs} | {full_time} | {no_knn_time} | {improvement} | {full_cost} | {no_knn_cost} | {cost_delta} |".format(
+                dataset=row["Dataset"],
                 runs=row["Runs"],
-                valid_runs=row["Successful Runs"],
-                mean_time=format_float(float(row["Mean Time (s)"]), 2),
-                std_time=format_float(float(row["Std Time (s)"]), 2),
-                mean_cost=format_float(float(row["Mean Best Cost"]), 2),
-                std_cost=format_float(float(row["Std Best Cost"]), 2),
+                full_time=format_float(float(row["Full Mean Time (s)"]), 2),
+                no_knn_time=format_float(float(row["No-KNN Mean Time (s)"]), 2),
+                improvement=format_float(float(row["Time Improvement (%)"]), 2),
+                full_cost=format_float(float(row["Full Mean Best Cost"]), 2),
+                no_knn_cost=format_float(float(row["No-KNN Mean Best Cost"]), 2),
+                cost_delta=format_float(float(row["Cost Delta"]), 2),
             )
         )
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def plot_summary(summary_rows: List[Dict[str, object]], out_png: Path) -> None:
-    labels = [str(row["Strategy"]) for row in summary_rows]
-    mean_times = [float(row["Mean Time (s)"]) for row in summary_rows]
-    std_times = [float(row["Std Time (s)"]) for row in summary_rows]
-    mean_costs = [float(row["Mean Best Cost"]) for row in summary_rows]
-    std_costs = [float(row["Std Best Cost"]) for row in summary_rows]
+    ordered_rows = sorted(summary_rows, key=lambda row: float(row["Time Improvement (%)"]), reverse=True)
+    labels = [str(row["Dataset"]) for row in ordered_rows]
+    improvements = [float(row["Time Improvement (%)"]) for row in ordered_rows]
+    full_times = [float(row["Full Mean Time (s)"]) for row in ordered_rows]
+    no_knn_times = [float(row["No-KNN Mean Time (s)"]) for row in ordered_rows]
 
     plt.style.use("seaborn-v0_8-whitegrid")
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), constrained_layout=True)
+    height = max(6.0, 0.42 * len(ordered_rows) + 2.0)
+    fig, axes = plt.subplots(1, 2, figsize=(15, height), constrained_layout=True)
 
+    x = range(len(ordered_rows))
     colors = ["#0F766E", "#B45309"]
-    x = range(len(labels))
-
-    time_bars = axes[0].bar(x, mean_times, yerr=std_times, capsize=6, color=colors, edgecolor="#1f2937")
-    axes[0].set_xticks(list(x), labels)
+    axes[0].bar(x, full_times, width=0.4, label="KNN On", color=colors[0])
+    axes[0].bar([i + 0.4 for i in x], no_knn_times, width=0.4, label="KNN Off", color=colors[1])
+    axes[0].set_xticks([i + 0.2 for i in x], labels, rotation=45, ha="right")
     axes[0].set_ylabel("Solve Time (s)")
-    axes[0].set_title("Mean Solve Time")
+    axes[0].set_title("Mean Solve Time by Dataset")
+    axes[0].legend(loc="best")
     axes[0].grid(axis="y", alpha=0.3)
-    for bar, value in zip(time_bars, mean_times):
-        axes[0].annotate(
-            f"{value:.1f}",
-            (bar.get_x() + bar.get_width() / 2.0, bar.get_height()),
-            ha="center",
-            va="bottom",
-            fontsize=9,
-            xytext=(0, 4),
-            textcoords="offset points",
-        )
 
-    cost_bars = axes[1].bar(x, mean_costs, yerr=std_costs, capsize=6, color=colors, edgecolor="#1f2937")
-    axes[1].set_xticks(list(x), labels)
-    axes[1].set_ylabel("Best Cost")
-    axes[1].set_title("Mean Best Cost")
-    axes[1].grid(axis="y", alpha=0.3)
-    for bar, value in zip(cost_bars, mean_costs):
+    y = list(range(len(ordered_rows)))
+    bar_colors = ["#059669" if value >= 0 else "#DC2626" for value in improvements]
+    bars = axes[1].barh(y, improvements, color=bar_colors, edgecolor="#1f2937")
+    axes[1].axvline(0, color="#111827", linewidth=1.0)
+    axes[1].set_yticks(y, labels)
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel("Time Improvement (%) = (No-KNN - KNN) / No-KNN")
+    axes[1].set_title("KNN Time Improvement")
+    axes[1].grid(axis="x", alpha=0.3)
+    for bar, value in zip(bars, improvements):
         axes[1].annotate(
-            f"{value:.1f}",
-            (bar.get_x() + bar.get_width() / 2.0, bar.get_height()),
-            ha="center",
-            va="bottom",
-            fontsize=9,
-            xytext=(0, 4),
+            f"{value:.1f}%",
+            (bar.get_width(), bar.get_y() + bar.get_height() / 2.0),
+            xytext=(4, 0),
             textcoords="offset points",
+            va="center",
+            fontsize=9,
         )
 
-    fig.suptitle("pr152 KNN Comparison over 10 Runs", fontsize=15)
-    fig.text(0.5, 0.01, "Error bars show one standard deviation", ha="center", fontsize=9)
+    best_row = ordered_rows[0] if ordered_rows else None
+    title = "All-Dataset KNN Comparison (2 runs per dataset)"
+    if best_row is not None:
+        title += f" | best: {best_row['Dataset']} ({float(best_row['Time Improvement (%)']):.1f}%)"
+    fig.suptitle(title, fontsize=15)
     fig.savefig(out_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -183,15 +196,20 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Run pr152 10 times with KNN on/off, export a summary table, raw CSV, and a figure."
+            "Run all datasets with KNN on/off, 2 runs each by default, and export a summary table, raw CSV, and a figure."
         )
     )
     parser.add_argument("--python", default=sys.executable, help="Python executable for svrap_solver.py")
     parser.add_argument("--solver", default=str(repo_root / "svrap_solver.py"), help="Path to svrap_solver.py")
     parser.add_argument("--exe", default=str(repo_root / "svrap.exe"), help="Path to C++ solver executable")
-    parser.add_argument("--dataset", default=str(repo_root / "main_dataset" / "pr152.txt"), help="Dataset path")
+    parser.add_argument("--dataset-dir", default=str(repo_root / "main_dataset"), help="Directory containing dataset files")
+    parser.add_argument(
+        "--datasets",
+        default="",
+        help="Comma-separated dataset names to run; default is all .txt files in --dataset-dir",
+    )
     parser.add_argument("--alpha", type=float, default=7.0, help="Alpha parameter for C++ solver")
-    parser.add_argument("--runs", type=int, default=10, help="Number of runs per strategy")
+    parser.add_argument("--runs", type=int, default=2, help="Number of runs per dataset and strategy")
     parser.add_argument(
         "--epochs",
         type=int,
@@ -213,7 +231,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--out-prefix",
-        default=str(repo_root / "results" / "pr152_knn_comparison"),
+        default=str(repo_root / "results" / "all_datasets_knn_comparison"),
         help="Output prefix for CSV/MD/PNG files",
     )
 
@@ -221,7 +239,7 @@ def main() -> int:
 
     solver_py = Path(args.solver)
     exe_path = Path(args.exe)
-    dataset_path = Path(args.dataset)
+    dataset_dir = Path(args.dataset_dir)
     out_prefix = Path(args.out_prefix)
 
     if not solver_py.exists():
@@ -230,8 +248,8 @@ def main() -> int:
     if not exe_path.exists():
         print(f"[ERROR] Executable not found: {exe_path}", file=sys.stderr)
         return 1
-    if not dataset_path.exists():
-        print(f"[ERROR] Dataset not found: {dataset_path}", file=sys.stderr)
+    if not dataset_dir.exists():
+        print(f"[ERROR] Dataset dir not found: {dataset_dir}", file=sys.stderr)
         return 1
 
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -240,16 +258,7 @@ def main() -> int:
     summary_md = out_prefix.with_name(out_prefix.name + "_summary.md")
     plot_png = out_prefix.with_name(out_prefix.name + "_summary.png")
 
-    ensure_attention_probs(
-        repo_root=repo_root,
-        python_exe=args.python,
-        solver_py=solver_py,
-        dataset_path=dataset_path,
-        variant_tag=args.variant_tag,
-        epochs=args.epochs,
-        seed=args.seed,
-        timeout=args.prep_timeout,
-    )
+    dataset_paths = discover_datasets(dataset_dir, args.datasets)
 
     strategy_specs = [
         ("full", "KNN On", 1),
@@ -272,75 +281,115 @@ def main() -> int:
         writer = csv.DictWriter(f, fieldnames=raw_fields)
         writer.writeheader()
 
-    total_jobs = len(strategy_specs) * args.runs
+    total_jobs = len(dataset_paths) * len(strategy_specs) * args.runs
     job_idx = 0
-    for strategy, label, knn_enabled in strategy_specs:
-        for run_idx in range(1, args.runs + 1):
-            job_idx += 1
-            print(
-                f"[{job_idx}/{total_jobs}] dataset={dataset_path.stem} run={run_idx} "
-                f"strategy={strategy}"
-            )
-            code, elapsed, best_cost, output = run_solver_once(
-                repo_root=repo_root,
-                exe_path=exe_path,
-                alpha=args.alpha,
-                dataset_path=dataset_path,
-                strategy=strategy,
-                timeout=args.solve_timeout,
-            )
-            if code != 0:
-                print(f"  [WARN] return_code={code}")
-            row = {
-                "dataset": dataset_path.stem,
-                "run": run_idx,
-                "strategy": strategy,
-                "knn_enabled": knn_enabled,
-                "return_code": code,
-                "elapsed_sec": elapsed,
-                "best_cost": best_cost,
-            }
-            raw_rows.append(row)
-            with raw_csv.open("a", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=raw_fields)
-                writer.writerow(row)
+    summary_fields = [
+        "Dataset",
+        "Runs",
+        "Full Mean Time (s)",
+        "Full Std Time (s)",
+        "No-KNN Mean Time (s)",
+        "No-KNN Std Time (s)",
+        "Time Delta (s)",
+        "Time Improvement (%)",
+        "Full Mean Best Cost",
+        "Full Std Best Cost",
+        "No-KNN Mean Best Cost",
+        "No-KNN Std Best Cost",
+        "Cost Delta",
+        "Best Improvement Flag",
+    ]
 
-    for strategy, label, knn_enabled in strategy_specs:
-        strategy_rows = [row for row in raw_rows if str(row["strategy"]) == strategy]
-        times = [float(row["elapsed_sec"]) for row in strategy_rows if float(row["elapsed_sec"]) == float(row["elapsed_sec"])]
-        costs = [float(row["best_cost"]) for row in strategy_rows if float(row["best_cost"]) == float(row["best_cost"])]
-        successful_runs = sum(
-            1
-            for row in strategy_rows
-            if int(row["return_code"]) == 0
-            and float(row["elapsed_sec"]) == float(row["elapsed_sec"])
-            and float(row["best_cost"]) == float(row["best_cost"])
+    for dataset_path in dataset_paths:
+        dataset_name = dataset_path.stem
+        ensure_attention_probs(
+            repo_root=repo_root,
+            python_exe=args.python,
+            solver_py=solver_py,
+            dataset_path=dataset_path,
+            variant_tag=f"{args.variant_tag}_{dataset_name}" if args.variant_tag else dataset_name,
+            epochs=args.epochs,
+            seed=args.seed,
+            timeout=args.prep_timeout,
         )
-        mean_time, std_time = mean_std(times)
-        mean_cost, std_cost = mean_std(costs)
+
+        per_dataset_rows: Dict[str, List[Dict[str, object]]] = {strategy: [] for strategy, _, _ in strategy_specs}
+
+        for strategy, label, knn_enabled in strategy_specs:
+            for run_idx in range(1, args.runs + 1):
+                job_idx += 1
+                print(
+                    f"[{job_idx}/{total_jobs}] dataset={dataset_name} run={run_idx} "
+                    f"strategy={strategy}"
+                )
+                code, elapsed, best_cost, _ = run_solver_once(
+                    repo_root=repo_root,
+                    exe_path=exe_path,
+                    alpha=args.alpha,
+                    dataset_path=dataset_path,
+                    strategy=strategy,
+                    timeout=args.solve_timeout,
+                )
+                if code != 0:
+                    print(f"  [WARN] return_code={code}")
+                row = {
+                    "dataset": dataset_name,
+                    "run": run_idx,
+                    "strategy": strategy,
+                    "knn_enabled": knn_enabled,
+                    "return_code": code,
+                    "elapsed_sec": elapsed,
+                    "best_cost": best_cost,
+                }
+                raw_rows.append(row)
+                per_dataset_rows[strategy].append(row)
+                with raw_csv.open("a", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=raw_fields)
+                    writer.writerow(row)
+
+        full_rows = per_dataset_rows["full"]
+        no_knn_rows = per_dataset_rows["no_knn"]
+        full_times = [float(row["elapsed_sec"]) for row in full_rows if float(row["elapsed_sec"]) == float(row["elapsed_sec"])]
+        no_knn_times = [float(row["elapsed_sec"]) for row in no_knn_rows if float(row["elapsed_sec"]) == float(row["elapsed_sec"])]
+        full_costs = [float(row["best_cost"]) for row in full_rows if float(row["best_cost"]) == float(row["best_cost"])]
+        no_knn_costs = [float(row["best_cost"]) for row in no_knn_rows if float(row["best_cost"]) == float(row["best_cost"])]
+
+        full_time_mean, full_time_std = mean_std(full_times)
+        no_knn_time_mean, no_knn_time_std = mean_std(no_knn_times)
+        full_cost_mean, full_cost_std = mean_std(full_costs)
+        no_knn_cost_mean, no_knn_cost_std = mean_std(no_knn_costs)
+
+        time_delta = no_knn_time_mean - full_time_mean
+        time_improvement_pct = float("nan")
+        if no_knn_time_mean == no_knn_time_mean and no_knn_time_mean != 0:
+            time_improvement_pct = time_delta / no_knn_time_mean * 100.0
+
+        cost_delta = full_cost_mean - no_knn_cost_mean
         summary_rows.append(
             {
-                "Strategy": label,
-                "KNN": "On" if knn_enabled else "Off",
+                "Dataset": dataset_name,
                 "Runs": args.runs,
-                "Successful Runs": successful_runs,
-                "Mean Time (s)": mean_time,
-                "Std Time (s)": std_time,
-                "Mean Best Cost": mean_cost,
-                "Std Best Cost": std_cost,
+                "Full Mean Time (s)": full_time_mean,
+                "Full Std Time (s)": full_time_std,
+                "No-KNN Mean Time (s)": no_knn_time_mean,
+                "No-KNN Std Time (s)": no_knn_time_std,
+                "Time Delta (s)": time_delta,
+                "Time Improvement (%)": time_improvement_pct,
+                "Full Mean Best Cost": full_cost_mean,
+                "Full Std Best Cost": full_cost_std,
+                "No-KNN Mean Best Cost": no_knn_cost_mean,
+                "No-KNN Std Best Cost": no_knn_cost_std,
+                "Cost Delta": cost_delta,
+                "Best Improvement Flag": "",
             }
         )
 
-    summary_fields = [
-        "Strategy",
-        "KNN",
-        "Runs",
-        "Successful Runs",
-        "Mean Time (s)",
-        "Std Time (s)",
-        "Mean Best Cost",
-        "Std Best Cost",
-    ]
+    valid_improvements = [row for row in summary_rows if row["Time Improvement (%)"] == row["Time Improvement (%)"]]
+    if valid_improvements:
+        best_row = max(valid_improvements, key=lambda row: float(row["Time Improvement (%)"]))
+        best_row["Best Improvement Flag"] = "BEST"
+
+    summary_rows = sorted(summary_rows, key=lambda row: float(row["Time Improvement (%)"]), reverse=True)
     with summary_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=summary_fields)
         writer.writeheader()
@@ -348,6 +397,13 @@ def main() -> int:
 
     write_markdown_table(summary_rows, summary_md)
     plot_summary(summary_rows, plot_png)
+
+    if summary_rows:
+        best_row = summary_rows[0]
+        print(
+            f"Best improvement: {best_row['Dataset']} ({float(best_row['Time Improvement (%)']):.2f}%), "
+            f"full={float(best_row['Full Mean Time (s)']):.2f}s, no_knn={float(best_row['No-KNN Mean Time (s)']):.2f}s"
+        )
 
     print(f"Saved raw CSV: {raw_csv}")
     print(f"Saved summary CSV: {summary_csv}")
