@@ -113,10 +113,13 @@ def main() -> int:
         default=str(repo_root / "results" / "convergence_curve_logs"),
         help="Directory where per-run training logs are copied",
     )
+    parser.add_argument("--exe", default=str(repo_root / "svrap.exe"), help="Path to the C++ executable")
+    parser.add_argument("--alpha", type=float, default=7.0, help="Alpha value for the solver")
     args = parser.parse_args()
 
     solver_path = Path(args.solver)
     dataset_dir = Path(args.dataset_dir)
+    exe_path = Path(args.exe) if hasattr(args, 'exe') else Path(str(repo_root / "svrap.exe"))
     raw_out = Path(args.raw_out)
     logs_dir = Path(args.logs_dir)
 
@@ -150,6 +153,12 @@ def main() -> int:
         "return_code",
         "elapsed_seconds",
         "best_cost",
+        "full_return_code",
+        "full_elapsed_seconds",
+        "full_iter_csv",
+        "baseline_return_code",
+        "baseline_elapsed_seconds",
+        "baseline_iter_csv",
         "history_path",
         "copied_history_path",
     ]
@@ -211,6 +220,49 @@ def main() -> int:
                 "history_path": str(result["history_path"]),
                 "copied_history_path": "" if copied_history_path is None else str(copied_history_path),
             }
+            # --- Run C++ solver (full) and (baseline) with iteration logging ---
+            # Build iteration log temp paths
+            full_iter_tmp = dataset_log_dir / f"run_full_{run_idx:02d}.csv"
+            baseline_iter_tmp = dataset_log_dir / f"run_ts_{run_idx:02d}.csv"
+
+            # Full
+            full_cmd = [str(exe_path), str(args.alpha), str(dataset_path), "full", f"--log-iterations={str(full_iter_tmp)}"]
+            t0 = time.perf_counter()
+            try:
+                proc_full = subprocess.run(full_cmd, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+                full_elapsed = time.perf_counter() - t0
+                full_rc = proc_full.returncode
+                (dataset_log_dir / f"run_{run_idx:02d}.full.stdout.txt").write_text(proc_full.stdout or "", encoding="utf-8")
+            except Exception as e:
+                full_elapsed = 0.0
+                full_rc = -1
+
+            # Baseline (ts-svrap)
+            t0b = time.perf_counter()
+            baseline_cmd = [str(exe_path), str(args.alpha), str(dataset_path), "baseline", f"--log-iterations={str(baseline_iter_tmp)}"]
+            try:
+                proc_base = subprocess.run(baseline_cmd, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+                base_elapsed = time.perf_counter() - t0b
+                base_rc = proc_base.returncode
+                (dataset_log_dir / f"run_{run_idx:02d}.baseline.stdout.txt").write_text(proc_base.stdout or "", encoding="utf-8")
+            except Exception as e:
+                base_elapsed = 0.0
+                base_rc = -1
+
+            # If iter files exist, ensure they are readable (they should be written by svrap.exe)
+            full_iter_csv = str(full_iter_tmp) if full_iter_tmp.exists() else ""
+            baseline_iter_csv = str(baseline_iter_tmp) if baseline_iter_tmp.exists() else ""
+
+            # Update the last-written row in raw CSV with C++ info
+            # (append new row reflecting C++ results)
+            row.update({
+                "full_return_code": full_rc,
+                "full_elapsed_seconds": round(float(full_elapsed), 6),
+                "full_iter_csv": full_iter_csv,
+                "baseline_return_code": base_rc,
+                "baseline_elapsed_seconds": round(float(base_elapsed), 6),
+                "baseline_iter_csv": baseline_iter_csv,
+            })
             with raw_out.open("a", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writerow(row)

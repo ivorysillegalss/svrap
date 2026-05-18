@@ -107,11 +107,7 @@ int main(int argc, char **argv) {
 
     StrategyConfig config;
     bool lock_paper_baseline = false;
-    if (argc >= 4) {
-        std::string strategy = argv[3];
-      if (strategy == "paper_baseline") {
-        // Strict TS-SVRAP paper-aligned baseline:
-        // keep core tabu/diversification/path-relinking, disable later-added guidance/acceleration.
+    auto apply_paper_baseline_defaults = [&config]() {
         config.use_neural_init = false;
         config.use_entropy = false;
         config.use_knn = false;
@@ -120,6 +116,26 @@ int main(int argc, char **argv) {
         config.diversification_times = 2;
         config.path_relinking_times = 50;
         config.entropy_weight = 0.0;
+    };
+    if (argc >= 4) {
+        std::string strategy = argv[3];
+      if (strategy == "paper_baseline") {
+        // Strict TS-SVRAP paper-aligned baseline:
+        // keep core tabu/diversification/path-relinking, disable later-added guidance/acceleration.
+        apply_paper_baseline_defaults();
+        lock_paper_baseline = true;
+      } else if (strategy == "nn_only") {
+        apply_paper_baseline_defaults();
+        config.use_neural_init = true;
+        lock_paper_baseline = true;
+      } else if (strategy == "knn_only") {
+        apply_paper_baseline_defaults();
+        config.use_knn = true;
+        lock_paper_baseline = true;
+      } else if (strategy == "entropy_only") {
+        apply_paper_baseline_defaults();
+        config.use_entropy = true;
+        config.entropy_weight = 1.0;
         lock_paper_baseline = true;
       } else if (strategy == "baseline") {
             config.use_neural_init = false;
@@ -208,6 +224,17 @@ int main(int argc, char **argv) {
     if (argc >= 10) {
       label_output_path = argv[9];
       std::cout << "Label output enabled: " << label_output_path << std::endl;
+    }
+
+    // Optional: parse any --log-iterations=<path> argument anywhere in argv
+    std::string iter_log_path = "";
+    for (int ai = 1; ai < argc; ++ai) {
+      std::string s = argv[ai];
+      const std::string prefix = "--log-iterations=";
+      if (s.rfind(prefix, 0) == 0) {
+        iter_log_path = s.substr(prefix.size());
+        std::cout << "Iteration logging enabled: " << iter_log_path << std::endl;
+      }
     }
 
     for (const auto &file : instance_files) {
@@ -389,6 +416,26 @@ int main(int argc, char **argv) {
         std::cout << "Tabu search finished in " << elapsed.count() << "s" << std::endl;
         std::cout << "Best cost for " << file << " = " << best_cost
                   << "\n";
+
+        // If per-iteration logging requested, write iteration CSV
+        if (!iter_log_path.empty()) {
+          try {
+            const auto &costs = tabu_seracher.get_iter_best_costs();
+            std::ofstream itout(iter_log_path);
+            if (itout.is_open()) {
+              itout << "Iteration,BestCost\n";
+              for (size_t i = 0; i < costs.size(); ++i) {
+                itout << i + 1 << "," << costs[i] << "\n";
+              }
+              itout.close();
+              std::cout << "Saved iteration log to " << iter_log_path << std::endl;
+            } else {
+              std::cerr << "Warning: failed to open iteration log file: " << iter_log_path << std::endl;
+            }
+          } catch (const std::exception &e) {
+            std::cerr << "Error writing iteration log: " << e.what() << std::endl;
+          }
+        }
 
         if (!label_output_path.empty()) {
           const auto &best_route = tabu_seracher.get_best_solution();

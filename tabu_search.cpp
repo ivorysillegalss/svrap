@@ -108,6 +108,8 @@ TabuSearch::TabuSearch(
 
   cost_trend_.push_back(cost);
   // 初始解视为第一个 Champion，初始化频率统计
+  // Initialize per-iteration best-costs with initial cost
+  iter_best_costs_.push_back(cost);
   update_champion_frequencies(champion_solution_);
 
   // Initialize nearby_table_
@@ -997,9 +999,15 @@ void TabuSearch::search(int T, int Q, int TBL) {
       move_since_champion_adddrop = 0;
       move_since_champion_twoopt = 0;
     }
+    // Record best-so-far cost for this iteration
+    iter_best_costs_.push_back(best_cost_);
   }
 
   // 结束时确保返回的 solution 是最优解
   iter_solution_ = iter_solution_;
   best_cost_ = best_cost_;
+    // Ensure iter_best_costs_ length corresponds to iterations
+    // (we push best cost at end of each iteration inside loop)
 }
+
+  // Note: iter_best_costs_ already accumulated per-iteration inside loop

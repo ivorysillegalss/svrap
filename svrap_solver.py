@@ -60,6 +60,9 @@ class SVRAPConfig:
     RL_LOSS_WEIGHT = 0.25
     COUNTERFACTUAL_SIGMOID_TEMP = 500.0
     ENTROPY_BONUS_WEIGHT = 0.01
+    USE_ENTROPY_ANNEALING = False
+    ENTROPY_BONUS_START = 0.01
+    ENTROPY_BONUS_END = 0.0
     SEED = 42
     EXTRA_REINFORCE_ONLY_DATASETS = set()
 
@@ -503,6 +506,16 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 node_loss = F.binary_cross_entropy(probs[:, 1], target_route_prob)
 
             entropy_bonus = dist.entropy().mean()
+            if SVRAPConfig.USE_ENTROPY_ANNEALING:
+                progress = epoch / max(SVRAPConfig.EPOCHS - 1, 1)
+                entropy_bonus_weight = (
+                    SVRAPConfig.ENTROPY_BONUS_START
+                    + (SVRAPConfig.ENTROPY_BONUS_END - SVRAPConfig.ENTROPY_BONUS_START)
+                    * progress
+                )
+            else:
+                entropy_bonus_weight = SVRAPConfig.ENTROPY_BONUS_WEIGHT
+
             if use_reinforce_only:
                 loss = reinforce_loss
             elif node_loss_interval > 1:
@@ -512,7 +525,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                     loss = (
                         SVRAPConfig.RL_LOSS_WEIGHT * reinforce_loss
                         + SVRAPConfig.NODE_LOSS_WEIGHT * node_loss
-                        - SVRAPConfig.ENTROPY_BONUS_WEIGHT * entropy_bonus
+                        - entropy_bonus_weight * entropy_bonus
                     )
                 else:
                     loss = reinforce_loss
@@ -520,7 +533,7 @@ def run_pipeline(train_model: bool = True, dataset_path: Optional[str] = None):
                 loss = (
                     SVRAPConfig.RL_LOSS_WEIGHT * reinforce_loss
                     + SVRAPConfig.NODE_LOSS_WEIGHT * node_loss
-                    - SVRAPConfig.ENTROPY_BONUS_WEIGHT * entropy_bonus
+                    - entropy_bonus_weight * entropy_bonus
                 )
             
             loss.backward()
@@ -643,11 +656,48 @@ if __name__ == "__main__":
     parser.add_argument("--variant-tag", type=str, default="", help="Tag for isolating model/log artifacts across test variants")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for Python/Torch/CUDA")
     parser.add_argument(
+        "--counterfactual-node-loss",
+        dest="counterfactual_node_loss",
+        action="store_true",
+        help="Enable counterfactual node loss during training",
+    )
+    parser.add_argument(
+        "--no-counterfactual-node-loss",
+        dest="counterfactual_node_loss",
+        action="store_false",
+        help="Disable counterfactual node loss during training",
+    )
+    parser.add_argument(
+        "--entropy-mode",
+        choices=["fixed", "anneal", "off"],
+        default="fixed",
+        help="Entropy bonus schedule mode",
+    )
+    parser.add_argument(
+        "--entropy-bonus-weight",
+        type=float,
+        default=0.01,
+        help="Fixed entropy bonus weight when entropy-mode=fixed",
+    )
+    parser.add_argument(
+        "--entropy-bonus-start",
+        type=float,
+        default=0.01,
+        help="Starting entropy bonus weight when entropy-mode=anneal",
+    )
+    parser.add_argument(
+        "--entropy-bonus-end",
+        type=float,
+        default=0.0,
+        help="Final entropy bonus weight when entropy-mode=anneal",
+    )
+    parser.add_argument(
         "--reinforce-only-datasets",
         nargs="*",
         default=[],
         help="Additional dataset names to train with pure REINFORCE (e.g., d493 rat783)",
     )
+    parser.set_defaults(counterfactual_node_loss=None)
     
     args = parser.parse_args()
 
@@ -658,6 +708,18 @@ if __name__ == "__main__":
     SVRAPConfig.EXTRA_REINFORCE_ONLY_DATASETS = {
         d.strip() for d in args.reinforce_only_datasets if d and d.strip()
     }
+    if args.counterfactual_node_loss is not None:
+        SVRAPConfig.USE_COUNTERFACTUAL_NODE_LOSS = args.counterfactual_node_loss
+    if args.entropy_mode == "off":
+        SVRAPConfig.USE_ENTROPY_ANNEALING = False
+        SVRAPConfig.ENTROPY_BONUS_WEIGHT = 0.0
+    elif args.entropy_mode == "anneal":
+        SVRAPConfig.USE_ENTROPY_ANNEALING = True
+        SVRAPConfig.ENTROPY_BONUS_START = args.entropy_bonus_start
+        SVRAPConfig.ENTROPY_BONUS_END = args.entropy_bonus_end
+    else:
+        SVRAPConfig.USE_ENTROPY_ANNEALING = False
+        SVRAPConfig.ENTROPY_BONUS_WEIGHT = args.entropy_bonus_weight
     
     dataset_path = args.dataset
     

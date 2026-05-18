@@ -25,6 +25,20 @@ def load_run_logs(dataset_dir: Path) -> List[pd.DataFrame]:
     return run_logs
 
 
+def load_iter_logs(dataset_dir: Path, pattern: str) -> List[pd.DataFrame]:
+    run_logs: List[pd.DataFrame] = []
+    for csv_path in sorted(dataset_dir.glob(pattern)):
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        # Expect columns: Iteration, BestCost
+        if {"Iteration", "BestCost"}.issubset(set(df.columns)):
+            df = df.rename(columns={"Iteration": "Epoch", "BestCost": "Best"})
+            run_logs.append(df[["Epoch", "Best"]].copy())
+    return run_logs
+
+
 def load_runtime_summary(raw_csv: Path) -> Dict[str, Dict[str, float]]:
     if not raw_csv.exists():
         return {}
@@ -77,28 +91,49 @@ def plot_dataset(
     if runtime_summary:
         summary.update(runtime_summary)
 
-    fig, axes = plt.subplots(len(METRICS), 1, figsize=(12, 12), sharex=True)
-    title = f"Convergence Curves - {dataset}"
+    # Prefer C++ per-iteration logs if available: run_full_*.csv and run_ts_*.csv
+    full_logs = load_iter_logs(dataset_dir, "run_full_*.csv")
+    ts_logs = load_iter_logs(dataset_dir, "run_ts_*.csv")
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    title = f"Convergence Curve - {dataset}"
     if runtime_summary and "runtime_mean" in runtime_summary:
         title += f" | runtime {runtime_summary['runtime_mean']:.1f}s ± {runtime_summary.get('runtime_std', 0.0):.1f}s"
-    fig.suptitle(title, fontsize=16)
+    ax.set_title(title)
 
-    for ax, metric in zip(axes, METRICS):
-        epochs, mean, std = align_metric(run_logs, metric)
-        ax.plot(epochs, mean, label=f"{metric} (mean)", linewidth=2.0)
-        ax.fill_between(epochs, mean - std, mean + std, alpha=0.18, label=f"{metric} ±1 std")
-        ax.set_ylabel(metric)
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc="best")
+    plotted = False
+    if full_logs:
+        epochs, mean, std = align_metric(full_logs, "Best")
+        ax.plot(epochs, mean, label="Full (mean)", linewidth=2.0)
+        ax.fill_between(epochs, mean - std, mean + std, alpha=0.18)
+        summary[f"full_final_mean"] = float(mean[~np.isnan(mean)][-1])
+        summary[f"full_final_std"] = float(std[~np.isnan(std)][-1])
+        plotted = True
 
-        valid_mean = mean[~np.isnan(mean)]
-        valid_std = std[~np.isnan(std)]
-        summary[f"{metric.lower()}_final_mean"] = float(valid_mean[-1])
-        summary[f"{metric.lower()}_final_std"] = float(valid_std[-1])
+    if ts_logs:
+        epochs_t, mean_t, std_t = align_metric(ts_logs, "Best")
+        ax.plot(epochs_t, mean_t, label="TS-SVRAP (mean)", linewidth=2.0)
+        ax.fill_between(epochs_t, mean_t - std_t, mean_t + std_t, alpha=0.18)
+        summary[f"ts_final_mean"] = float(mean_t[~np.isnan(mean_t)][-1])
+        summary[f"ts_final_std"] = float(std_t[~np.isnan(std_t)][-1])
+        plotted = True
 
-    axes[-1].set_xlabel("Epoch")
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    if not plotted:
+        # Fall back to training logs (Cost / Best)
+        for metric in ["Best"]:
+            epochs, mean, std = align_metric(run_logs, metric)
+            ax.plot(epochs, mean, label=f"{metric} (mean)", linewidth=2.0)
+            ax.fill_between(epochs, mean - std, mean + std, alpha=0.18)
+            summary[f"{metric.lower()}_final_mean"] = float(mean[~np.isnan(mean)][-1])
+            summary[f"{metric.lower()}_final_std"] = float(std[~np.isnan(std)][-1])
+
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Cost")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+
     out_path = out_dir / f"{dataset}_convergence_curve.png"
+    plt.tight_layout()
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
 

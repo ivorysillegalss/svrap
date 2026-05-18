@@ -63,6 +63,7 @@ public:
   const std::vector<Point> &get_iter_solution() const { return iter_solution_; }
   const std::vector<Point> &get_best_solution() const { return champion_solution_; }
   double get_best_cost() const { return best_cost_; }
+  const std::vector<double> &get_iter_best_costs() const { return iter_best_costs_; }
 
 private:
   // 最优解所对应成本的变化趋势
@@ -117,6 +118,9 @@ private:
   // Precomputed K-nearest neighbors for each point (by index)
   std::vector<std::vector<int>> nearby_table_;
   int K_NEIGHBORS;
+
+  // Per-iteration best-cost trace (best-so-far at each iteration)
+  std::vector<double> iter_best_costs_;
 
     // 邻域操作: 返回 {新路径, 新Map, 新Cost, 操作涉及的点(用于禁忌表)}
     std::tuple<std::vector<Point>, std::map<size_t, VertexInfo>,
