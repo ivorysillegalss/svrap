@@ -210,6 +210,29 @@ int main(int argc, char **argv) {
       std::cout << "Label output enabled: " << label_output_path << std::endl;
     }
 
+    // Optional output path for the final ordered route.
+    // Usage: ... <label_output_path> <route_output_path>
+    std::string route_output_path;
+    if (argc >= 11) {
+      route_output_path = argv[10];
+      std::cout << "Route output enabled: " << route_output_path << std::endl;
+    }
+
+    auto derive_route_output_path = [](const std::string &label_path) {
+      std::string route_path = label_path;
+      if (route_path.size() >= 4 &&
+          route_path.substr(route_path.size() - 4) == ".txt") {
+        route_path.erase(route_path.size() - 4);
+      }
+      route_path += "_route.csv";
+      return route_path;
+    };
+
+    if (route_output_path.empty() && !label_output_path.empty()) {
+      route_output_path = derive_route_output_path(label_output_path);
+      std::cout << "Route output enabled: " << route_output_path << std::endl;
+    }
+
     for (const auto &file : instance_files) {
       try {
         std::cout << "==============================\n";
@@ -365,6 +388,15 @@ int main(int argc, char **argv) {
         GreedyLocalSearch greedy_searcher = greedy_local_search(
             ontour, offtour, distance, vertex_map, locations);
         std::cout << "Greedy search done" << std::endl;
+        // Debug: print initial greedy route size and sample ids
+        const auto &greedy_route = greedy_searcher.get_route();
+        std::cerr << "DEBUG: greedy_route.size()=" << greedy_route.size() << std::endl;
+        if (!greedy_route.empty()) {
+          std::cerr << "DEBUG: greedy_route sample ids:";
+          for (size_t i = 0; i < std::min<size_t>(5, greedy_route.size()); ++i)
+            std::cerr << " " << greedy_route[i].id;
+          std::cerr << std::endl;
+        }
 
         // 执行禁忌搜索
         TabuSearch tabu_seracher =
@@ -409,6 +441,24 @@ int main(int argc, char **argv) {
             }
             std::cout << "Saved route labels to " << label_output_path
                       << " (n=" << labels.size() << ")" << std::endl;
+          }
+        }
+
+        if (!route_output_path.empty()) {
+          const auto &best_route = tabu_seracher.get_best_solution();
+          std::ofstream route_out(route_output_path);
+          if (!route_out.is_open()) {
+            std::cerr << "Warning: failed to open route output file: "
+                      << route_output_path << std::endl;
+          } else {
+            route_out << "order,x,y,id\n";
+            for (size_t i = 0; i < best_route.size(); ++i) {
+              const auto &p = best_route[i];
+              route_out << i << "," << p.x << "," << p.y << "," << p.id
+                        << "\n";
+            }
+            std::cout << "Saved route order to " << route_output_path
+                      << " (n=" << best_route.size() << ")" << std::endl;
           }
         }
       } catch (const std::exception &e) {

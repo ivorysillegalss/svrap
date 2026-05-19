@@ -26,6 +26,8 @@ struct StrategyConfig {
   int diversification_times = 2;
   int path_relinking_times = 50;
   double entropy_weight = 1.0;
+  // Enforce a minimum tour size for champion solutions to avoid degenerate single-node tours
+  int min_tour_size = 2;
 };
 
 class TabuInfo {

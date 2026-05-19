@@ -1,6 +1,7 @@
 #include "tabu_search.h"
 #include "greedy.h"
 #include "input.h"
+#include <iostream>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -719,6 +720,15 @@ void TabuSearch::search(int T, int Q, int TBL) {
   // double current_cost = init_calc.tabu_cacl_cost();
   double current_cost = GreedyLocalSearch::compute_cost(current_sol, current_dic, distance_);
 
+  // Debug: initial champion info
+  std::cerr << "DEBUG: TabuSearch::search start, initial_champion_size=" << champion_solution_.size() << " champion_cost=" << champion_cost_ << std::endl;
+  if (!champion_solution_.empty()) {
+    std::cerr << "DEBUG: champion sample ids:";
+    for (size_t i = 0; i < std::min<size_t>(5, champion_solution_.size()); ++i)
+      std::cerr << " " << champion_solution_[i].id;
+    std::cerr << std::endl;
+  }
+
   while (iter_count < MAX_TOTAL_ITER) {
     iter_count++;
 
@@ -959,15 +969,29 @@ void TabuSearch::search(int T, int Q, int TBL) {
 
     // 3. 更新 Champion（全局最优解）及路径重连（4b）
     if (chosen_cost < champion_cost_ - 1e-9) {
-      prev_champion_solution_ = champion_solution_;
-      champion_solution_ = current_sol;
-      champion_vertex_map_ = current_dic;
-      champion_cost_ = chosen_cost;
-      best_cost_ = chosen_cost;
-      iter_solution_ = current_sol;
-      cost_trend_.push_back(best_cost_);
+      // Enforce minimum tour size from configuration
+      if ((int)current_sol.size() < config_.min_tour_size) {
+        std::cerr << "DEBUG: rejected champion update because current_sol.size()=" << current_sol.size() << " < min_tour_size=" << config_.min_tour_size << std::endl;
+      } else {
+        prev_champion_solution_ = champion_solution_;
+        champion_solution_ = current_sol;
+        champion_vertex_map_ = current_dic;
+        champion_cost_ = chosen_cost;
+        best_cost_ = chosen_cost;
+        iter_solution_ = current_sol;
+        cost_trend_.push_back(best_cost_);
 
-      update_champion_frequencies(champion_solution_);
+        update_champion_frequencies(champion_solution_);
+
+        // Debug: champion updated
+        std::cerr << "DEBUG: champion updated, new_size=" << champion_solution_.size() << " new_cost=" << champion_cost_ << std::endl;
+        if (!champion_solution_.empty()) {
+          std::cerr << "DEBUG: new champion sample ids:";
+          for (size_t i = 0; i < std::min<size_t>(5, champion_solution_.size()); ++i)
+            std::cerr << " " << champion_solution_[i].id;
+          std::cerr << std::endl;
+        }
+      }
 
       if (config_.use_path_relinking) {
         // 路径重连：在前一个 Champion 与新 Champion 之间
@@ -982,15 +1006,21 @@ void TabuSearch::search(int T, int Q, int TBL) {
         tabu.update_tabu();
 
         if (pr_cost < best_cost_ - 1e-9) {
-          champion_solution_ = pr_sol;
-          champion_cost_ = pr_cost;
-          best_cost_ = pr_cost;
-          iter_solution_ = pr_sol;
-          cost_trend_.push_back(best_cost_);
-          current_sol = pr_sol;
-          current_cost = pr_cost;
+          // Only accept path-relinking result if it respects min_tour_size
+          if ((int)pr_sol.size() >= config_.min_tour_size) {
+            champion_solution_ = pr_sol;
+            champion_cost_ = pr_cost;
+            best_cost_ = pr_cost;
+            iter_solution_ = pr_sol;
+            cost_trend_.push_back(best_cost_);
+            current_sol = pr_sol;
+            current_cost = pr_cost;
 
-          update_champion_frequencies(champion_solution_);
+            update_champion_frequencies(champion_solution_);
+            std::cerr << "DEBUG: accepted path-relinking champion size=" << pr_sol.size() << " cost=" << pr_cost << std::endl;
+          } else {
+            std::cerr << "DEBUG: rejected path-relinking champion size=" << pr_sol.size() << " < min_tour_size=" << config_.min_tour_size << std::endl;
+          }
         }
       }
 
